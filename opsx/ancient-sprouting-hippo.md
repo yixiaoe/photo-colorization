@@ -1,7 +1,7 @@
 # 项目模型复现简要计划（基于 InstColorization 参考实现）
 
 ## Context
-当前目标是在本仓库中复现 `Aware_Image_Colorization_CVPR_2020_paper` 的基线效果，并为后续优化提供可迭代代码底座。约束是：`InstColorization-master(reference)/` 仅作参考不可修改，并且不必要完全照搬，可以有所更改优化；项目代码应落在 `code/`；训练将在远程 RTX4090 服务器运行，因此需要优先处理环境兼容与最小闭环可运行性。
+当前目标是在本仓库中复现 `Aware_Image_Colorization_CVPR_2020_paper` 的基线效果，并为后续优化提供可迭代代码底座。约束是：`InstColorization-master(reference)/` 仅作参考，不可修改，且不必完全照搬，可根据复现环境做适当更改与优化；项目代码应落在 `code/`；训练将在远程 RTX4090 服务器运行，因此需要优先处理环境兼容与最小闭环可运行性。
 
 ## 推荐实施路径（5 步）
 1. **搭建最小代码骨架（先可跑，再完善）**  
