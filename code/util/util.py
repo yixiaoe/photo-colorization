@@ -1,8 +1,15 @@
 """Color-space utilities and Lab/RGB conversion for PyTorch tensors."""
 import os
+from pathlib import Path
+
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ZHANG2016_RESOURCE_DIR = REPO_ROOT / 'resources' / 'zhang2016'
 
 
 # ── Lab ↔ RGB (GPU-compatible) ────────────────────────────────────────────────
@@ -93,6 +100,59 @@ def decode_mean(data_ab_quant, opt):
     a_inf = torch.sum(torch.sum(quant, dim=2) * a_range, dim=1, keepdim=True)
     b_inf = torch.sum(torch.sum(quant, dim=1) * a_range, dim=1, keepdim=True)
     return torch.cat([a_inf, b_inf], dim=1) / opt.ab_norm
+
+
+def load_zhang2016_ab_bins(device=None, resource_dir=None):
+    """Load the official 313 in-gamut ab bin centers as a tensor."""
+    resource_dir = Path(resource_dir) if resource_dir else ZHANG2016_RESOURCE_DIR
+    path = resource_dir / 'pts_in_hull.npy'
+    pts = np.load(path).astype(np.float32)
+    if pts.shape != (313, 2):
+        raise ValueError(f'expected pts_in_hull shape (313, 2), got {pts.shape}')
+    return torch.from_numpy(pts).to(device) if device is not None else torch.from_numpy(pts)
+
+
+def load_zhang2016_prior_probs(device=None, resource_dir=None):
+    """Load the official Zhang2016 color prior probabilities."""
+    resource_dir = Path(resource_dir) if resource_dir else ZHANG2016_RESOURCE_DIR
+    path = resource_dir / 'prior_probs.npy'
+    prior = np.load(path).astype(np.float32)
+    if prior.shape != (313,):
+        raise ValueError(f'expected prior_probs shape (313,), got {prior.shape}')
+    prior = prior / max(float(prior.sum()), 1e-12)
+    tensor = torch.from_numpy(prior)
+    return tensor.to(device) if device is not None else tensor
+
+
+def build_zhang2016_rebalance_weights(prior_probs, gamma=0.5):
+    """Build prior-smoothed class weights from the official color prior."""
+    q = prior_probs.numel()
+    prior_mix = (1.0 - gamma) * prior_probs + gamma / float(q)
+    weights = 1.0 / torch.clamp(prior_mix, min=1e-12)
+    weights = weights / torch.sum(prior_probs * weights)
+    return weights
+
+
+def encode_ab_to_zhang2016_bins(data_ab, pts_in_hull, opt):
+    """Map normalised ab tensors to nearest official 313-bin class labels."""
+    if data_ab.dim() != 4 or data_ab.size(1) != 2:
+        raise ValueError(f'expected ab tensor N x 2 x H x W, got {tuple(data_ab.shape)}')
+    ab = data_ab * opt.ab_norm
+    n, _, h, w = ab.shape
+    flat = ab.permute(0, 2, 3, 1).reshape(-1, 2)
+    pts = pts_in_hull.to(flat.device, dtype=flat.dtype)
+    distances = torch.cdist(flat.unsqueeze(0), pts.unsqueeze(0)).squeeze(0)
+    labels = torch.argmin(distances, dim=1)
+    return labels.view(n, h, w).long()
+
+
+def decode_zhang2016_annealed_mean(logits, pts_in_hull, opt, temperature=0.38):
+    """Decode 313-bin logits to normalised ab using annealed-mean."""
+    if logits.dim() != 4 or logits.size(1) != 313:
+        raise ValueError(f'expected logits N x 313 x H x W, got {tuple(logits.shape)}')
+    pts = pts_in_hull.to(logits.device, dtype=logits.dtype) / opt.ab_norm
+    probs = F.softmax(logits / temperature, dim=1)
+    return torch.einsum('nqhw,qc->nchw', probs, pts)
 
 
 def get_colorization_data(data_raw, opt, ab_thresh=5.):
