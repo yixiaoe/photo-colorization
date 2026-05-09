@@ -3,7 +3,7 @@
 set -e
 
 METHOD=${1:-"zhang2016"}        # zhang2016 | inst2020
-TEST_DIR=${2:-"data/test"}
+TEST_DIR=${2:-"../data/imagenet_mini/test"}
 NAME=${3:-"$METHOD"}
 EXEMPLAR=${4:-""}               # pass --exemplar to enable
 REF_IMG=${5:-""}
@@ -19,7 +19,7 @@ python test.py \
   --method "$METHOD" \
   --name "$NAME" \
   --test_img_dir "$TEST_DIR" \
-  --results_img_dir "results/$METHOD" \
+  --results_img_dir "../results/$METHOD" \
   --which_epoch latest \
   --fineSize 256 \
   $EXTRA_ARGS
