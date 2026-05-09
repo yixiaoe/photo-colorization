@@ -15,3 +15,23 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+
+# datasets: keep docs, do not commit dataset files
+data/*
+!data/README.md
+!data/.gitkeep
+
+# training outputs
+checkpoints/*
+!checkpoints/README.md
+!checkpoints/.gitkeep
+
+# inference outputs
+results/*
+!results/README.md
+!results/.gitkeep
+
+# experiment logs and metrics
+experiments/*
+!experiments/README.md
+!experiments/.gitkeep
