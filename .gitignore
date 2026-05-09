@@ -9,3 +9,9 @@ CLAUDE.md
 
 # reference
 InstColorization-master(reference)/
+
+# python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/

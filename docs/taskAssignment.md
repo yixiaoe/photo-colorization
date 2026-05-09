@@ -1,7 +1,7 @@
 # 子任务分配表
 
 **项目名称：** 黑白照片上色（三阶段）  
-**更新日期：** 2026/05/09
+**更新日期：** 2026/05/09（Task-02/03/04 已完成，负责人：Yi_CC）
 
 ---
 
@@ -10,9 +10,9 @@
 | 任务编号 | 任务名称 | Phase | 负责人 | 状态 | 依赖任务 |
 |---------|---------|-------|--------|------|---------|
 | Task-01 | 环境验证（autoDL 服务器） | 准备 | | ☑ 已完成 | 无 |
-| Task-02 | code/ 目录骨架搭建 | 准备 | | ☐ 未开始 | Task-01 |
-| Task-03 | options 参数体系 | 准备 | | ☐ 未开始 | Task-02 |
-| Task-04 | 数据集管线 | 准备 | | ☐ 未开始 | Task-03 |
+| Task-02 | code/ 目录骨架搭建 | 准备 | Yi_CC | ☑ 已完成 | Task-01 |
+| Task-03 | options 参数体系 | 准备 | Yi_CC | ☑ 已完成 | Task-02 |
+| Task-04 | 数据集管线 | 准备 | Yi_CC | ☑ 已完成 | Task-03 |
 | Task-05 | [P1] Zhang2016Generator 网络实现 | Phase 1 | | ☐ 未开始 | Task-03 |
 | Task-06 | [P1] 训练打通（全图上色） | Phase 1 | | ☐ 未开始 | Task-04, Task-05 |
 | Task-07 | [P1] 推理闭环与评测 | Phase 1 | | ☐ 未开始 | Task-06 |
@@ -41,17 +41,20 @@
 
 ---
 
-### Task-02：code/ 目录骨架搭建
-**目标：** 建立 `code/` 目录结构与入口文件占位  
-**内容：**
-- 按 `architecture.md` 建立所有目录与空文件
-- 确保 `scripts/train_phase1.sh`、`scripts/train_phase2.sh`、`scripts/test.sh` 参数结构正确
+### Task-02：code/ 目录骨架搭建 ☑
+**负责人：** Yi_CC  
+**交付文件：**
+- `code/train.py`、`code/test.py`（主入口）
+- `code/models/`：`__init__.py`、`base_model.py`、`zhang2016_model.py`（占位）、`inst2020_model.py`（占位）、`networks.py`（占位）
+- `code/util/`：`util.py`、`visualizer.py`
+- `code/scripts/`：`train_phase1.sh`、`train_phase2.sh`、`test.sh`、`setup.sh`
 
 ---
 
-### Task-03：options 参数体系
-**文件：** `code/options/base_options.py`、`code/options/train_options.py`  
-**核心参数：**
+### Task-03：options 参数体系 ☑
+**负责人：** Yi_CC  
+**交付文件：** `code/options/base_options.py`、`code/options/train_options.py`（含 `TestOptions`）  
+**已实现参数：**
 - `--method`：`zhang2016` | `inst2020`
 - `--stage`：`full` | `instance` | `fusion`（仅 inst2020 使用）
 - `--dataset`：`imagenet_mini` | `cifar10`
@@ -61,15 +64,15 @@
 
 ---
 
-### Task-04：数据集管线
-**文件：** `code/datasets/colorization_dataset.py`  
-**内容：**
-- 支持 ImageNet-Mini 与 CIFAR-10
-- 彩色图 → CIE Lab，L 通道为输入，ab 为标签
-- Phase 1（zhang2016）：全图，额外返回 313-bin 量化标签
-- Phase 2 instance 阶段：在线随机裁剪 crop（无需预计算 npz）
-- Phase 2 fusion 阶段：调用 torchvision Mask R-CNN 生成 bbox（支持缓存）
-- 启动时验证数据目录存在，早期报错
+### Task-04：数据集管线 ☑
+**负责人：** Yi_CC  
+**交付文件：** `code/datasets/colorization_dataset.py`  
+**已实现 Dataset 类：**
+- `ColorizationDataset`：全图，zhang2016 + inst2020 `full` 阶段
+- `InstanceDataset`：在线随机 crop，inst2020 `instance` 阶段（无需预计算 npz）
+- `FusionDataset`：全图 + torchvision Mask R-CNN 在线 bbox，inst2020 `fusion` 阶段
+- `TestDataset`：推理用，支持两种 method
+- `create_dataset(opt, stage, split)` 工厂函数统一入口
 
 ---
 
