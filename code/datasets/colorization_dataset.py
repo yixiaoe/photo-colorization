@@ -117,7 +117,7 @@ def _collect_images(root):
 
 class ColorizationDataset(Data.Dataset):
     """
-    Full-image dataset for Phase 1 (zhang2016) and Phase 2 stage='full'.
+    Full-image dataset for Phase 1 (cnn_color) and Phase 2 stage='full'.
     Returns {'rgb_img': Tensor(3,H,W), 'gray_img': Tensor(3,H,W)}.
     """
     def __init__(self, opt, split='train'):
@@ -285,7 +285,7 @@ class FusionDataset(Data.Dataset):
 class TestDataset(Data.Dataset):
     """
     Inference dataset. Returns full image + optional online bbox.
-    Used by test.py for both zhang2016 and inst2020.
+    Used by test.py for both cnn_color and inst_fusion.
     """
     def __init__(self, opt, box_num=8):
         self.opt = opt
@@ -315,7 +315,7 @@ class TestDataset(Data.Dataset):
             'empty_box': True,
         }
 
-        if self.opt.method == 'inst2020':
+        if self.opt.method == 'inst_fusion':
             bboxes = _predict_bbox(pil_img, self.device, self.box_num)
             if bboxes:
                 sz = self.final_size

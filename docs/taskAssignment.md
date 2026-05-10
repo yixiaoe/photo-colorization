@@ -1,7 +1,7 @@
 # 子任务分配表
 
 **项目名称：** 黑白照片上色（三阶段）  
-**更新日期：** 2026/05/09（Task-02/03/04 已完成，负责人：Yi_CC）
+**更新日期：** 2026/05/10（Task-02/03/04 已完成，负责人：Yi_CC）
 
 ---
 
@@ -13,7 +13,7 @@
 | Task-02 | code/ 目录骨架搭建 | 准备 | Yi_CC | ☑ 已完成 | Task-01 |
 | Task-03 | options 参数体系 | 准备 | Yi_CC | ☑ 已完成 | Task-02 |
 | Task-04 | 数据集管线 | 准备 | Yi_CC | ☑ 已完成 | Task-03 |
-| Task-05 | [P1] Zhang2016Generator 网络实现 | Phase 1 | | ☐ 未开始 | Task-03 |
+| Task-05 | [P1] CnnColorGenerator 网络实现 | Phase 1 | | ☐ 未开始 | Task-03 |
 | Task-06 | [P1] 训练打通（全图上色） | Phase 1 | | ☐ 未开始 | Task-04, Task-05 |
 | Task-07 | [P1] 推理闭环与评测 | Phase 1 | | ☐ 未开始 | Task-06 |
 | Task-08 | [P2] 双分支网络迁移 | Phase 2 | | ☐ 未开始 | Task-07 |
@@ -45,7 +45,7 @@
 **负责人：** Yi_CC  
 **交付文件：**
 - `code/train.py`、`code/test.py`（主入口）
-- `code/models/`：`__init__.py`、`base_model.py`、`zhang2016_model.py`（占位）、`inst2020_model.py`（占位）、`networks.py`（占位）
+- `code/models/`：`__init__.py`、`base_model.py`、`cnn_color_model.py`（占位）、`inst_fusion_model.py`（占位）、`networks.py`（占位）
 - `code/util/`：`util.py`、`visualizer.py`
 - `code/scripts/`：`train_phase1.sh`、`train_phase2.sh`、`test.sh`、`setup.sh`
 
@@ -55,8 +55,8 @@
 **负责人：** Yi_CC  
 **交付文件：** `code/options/base_options.py`、`code/options/train_options.py`（含 `TestOptions`）  
 **已实现参数：**
-- `--method`：`zhang2016` | `inst2020`
-- `--stage`：`full` | `instance` | `fusion`（仅 inst2020 使用）
+- `--method`：`cnn_color` | `inst_fusion`
+- `--stage`：`full` | `instance` | `fusion`（仅 inst_fusion 使用）
 - `--dataset`：`imagenet_mini` | `cifar10`
 - `--exemplar`：flag，是否启用参考图 Bonus
 - `--ref_img`：参考图路径（exemplar 模式）
@@ -68,35 +68,35 @@
 **负责人：** Yi_CC  
 **交付文件：** `code/datasets/colorization_dataset.py`  
 **已实现 Dataset 类：**
-- `ColorizationDataset`：全图，zhang2016 + inst2020 `full` 阶段
-- `InstanceDataset`：在线随机 crop，inst2020 `instance` 阶段（无需预计算 npz）
-- `FusionDataset`：全图 + torchvision Mask R-CNN 在线 bbox，inst2020 `fusion` 阶段
+- `ColorizationDataset`：全图，cnn_color + inst_fusion `full` 阶段
+- `InstanceDataset`：在线随机 crop，inst_fusion `instance` 阶段（无需预计算 npz）
+- `FusionDataset`：全图 + torchvision Mask R-CNN 在线 bbox，inst_fusion `fusion` 阶段
 - `TestDataset`：推理用，支持两种 method
 - `create_dataset(opt, stage, split)` 工厂函数统一入口
 
 ---
 
-### Task-05：[P1] Zhang2016Generator 网络实现
-**文件：** `code/models/networks.py`、`code/models/zhang2016_model.py`  
+### Task-05：[P1] CnnColorGenerator 网络实现
+**文件：** `code/models/networks.py`、`code/models/cnn_color_model.py`  
 **内容：**
-- `Zhang2016Generator`：L(1ch) → 313 ab bins 概率图，Conv+BN+ReLU
+- `CnnColorGenerator`：L(1ch) → 313 ab bins 概率图，Conv+BN+ReLU
 - 损失：多项交叉熵 + 类别重平衡权重（经验色彩分布）
 - 推理：annealed-mean 解码（温度参数 T=0.38）
-- 模型工厂 `__init__.py` 注册 `zhang2016`
+- 模型工厂 `__init__.py` 注册 `cnn_color`
 
 ---
 
 ### Task-06：[P1] 训练打通
-**文件：** `code/train.py`（`--method zhang2016`）、`code/scripts/train_phase1.sh`  
+**文件：** `code/train.py`（`--method cnn_color`）、`code/scripts/train_phase1.sh`  
 **内容：**
 - 单阶段训练：全图 L → ab，多项交叉熵 + 重平衡
 - TensorBoard 日志：loss 曲线
-- 烟雾测试：10 iteration，无报错，权重正常保存至 `checkpoints/zhang2016/`
+- 烟雾测试：10 iteration，无报错，权重正常保存至 `checkpoints/cnn_color/`
 
 ---
 
 ### Task-07：[P1] 推理闭环与评测
-**文件：** `code/test.py`（`--method zhang2016`）  
+**文件：** `code/test.py`（`--method cnn_color`）  
 **内容：**
 - 加载 Phase 1 权重，对灰度图输出上色结果
 - 评测：
@@ -107,17 +107,17 @@
 ---
 
 ### Task-08：[P2] 双分支网络迁移
-**文件：** `code/models/networks.py`、`code/models/inst2020_model.py`  
+**文件：** `code/models/networks.py`、`code/models/inst_fusion_model.py`  
 **内容：**
-- `SIGGRAPHGenerator`：继承/复用 `Zhang2016Generator`，加载 Phase 1 权重
+- `InstFusionGenerator`：继承/复用 `CnnColorGenerator`，加载 Phase 1 权重
 - `FusionGenerator`：3-conv 预测逐像素融合权重
 - `WeightGenerator`：实例与全图加权融合
-- 模型工厂注册 `inst2020`
+- 模型工厂注册 `inst_fusion`
 
 ---
 
 ### Task-09：[P2] 三阶段训练打通
-**文件：** `code/train.py`（`--method inst2020`）、`code/scripts/train_phase2.sh`  
+**文件：** `code/train.py`（`--method inst_fusion`）、`code/scripts/train_phase2.sh`  
 **内容：**
 - `--stage full`：全图上色（从 Phase 1 权重初始化）
 - `--stage instance`：实例 crop 上色（从 full 权重初始化）
@@ -128,7 +128,7 @@
 ---
 
 ### Task-10：[P2] 推理闭环与评测
-**文件：** `code/test.py`（`--method inst2020`）  
+**文件：** `code/test.py`（`--method inst_fusion`）  
 **内容：**
 - 有 bbox → 融合推理（instance + full）；无 bbox → 全图回退
 - bbox 检测使用 torchvision Mask R-CNN（在线推理，无需离线 npz）
@@ -141,7 +141,7 @@
 **内容：**
 - 输入：灰度图特征 + 参考图 Color Palette（色彩 patch embedding）
 - Cross-Attention：将参考色彩迁移至灰度图语义区域
-- 可插入 `zhang2016_model.py` 或 `inst2020_model.py` 两条路径
+- 可插入 `cnn_color_model.py` 或 `inst_fusion_model.py` 两条路径
 
 ---
 

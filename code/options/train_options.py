@@ -48,7 +48,7 @@ class TestOptions(BaseOptions):
         parser.add_argument('--how_many', type=int, default=200,
                             help='max number of test images to process')
         parser.add_argument('--box_num', type=int, default=8,
-                            help='max instances per image (inst2020 only)')
+                            help='max instances per image (inst_fusion only)')
 
         # ── Exemplar Bonus ────────────────────────────────────────────────
         parser.add_argument('--exemplar', action='store_true',

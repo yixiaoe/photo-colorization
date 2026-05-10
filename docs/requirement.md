@@ -1,6 +1,6 @@
 # 项目要求与功能规格
 
-**更新日期：** 2026/05/09
+**更新日期：** 2026/05/10
 
 ---
 
@@ -20,29 +20,29 @@
 
 ## 三阶段计划与功能规格
 
-### Phase 1：Zhang et al. 2016（基线）
+### Phase 1：`cnn_color`（基线）
 
-**论文：** `Colorful_Image_Colorizasion_2016_paper.pdf`
+**论文：** `Colorful_Image_Colorizasion_2016_paper.pdf`（Zhang et al. 2016）
 
 - 输入：L 通道（灰度）→ 输出：313 个 ab 色彩 bin 概率分布
 - 损失：多项交叉熵 + 类别重平衡权重（抑制灰色偏向）
 - 推理：annealed-mean 解码（温度参数 T=0.38）
-- **无需 Mask R-CNN，无需 Attention**
+- **无需 Mask R-CNN，��需 Attention**
 - 验收：能对 ImageNet-Mini/CIFAR-10 完整跑通训练与推理
 
 **运行命令：**
 ```bash
-python train.py --method zhang2016 --dataset imagenet_mini
-python test.py  --method zhang2016 --input <img>
+python train.py --method cnn_color --dataset imagenet_mini
+python test.py  --method cnn_color --test_img_dir data/test
 ```
 
 ---
 
-### Phase 2：Su et al. CVPR 2020（进阶）
+### Phase 2：`inst_fusion`（进阶）
 
-**论文：** `Aware_Image_Colorization_CVPR_2020_paper.pdf`
+**论文：** `Aware_Image_Colorization_CVPR_2020_paper.pdf`（Su et al. CVPR 2020）
 
-- 在 Phase 1 骨干（`SIGGRAPHGenerator`）上叠加双分支结构
+- 在 Phase 1 骨干（`CnnColorGenerator`）上叠加双分支结构
 - **Mask R-CNN**（`torchvision` 内置）：检测实例 → crop 256×256
 - **融合权重（Attention）**：3-conv 预测逐像素权重，融合实例分支与全图分支特征
 - 三阶段训练：`full → instance → fusion`
@@ -50,10 +50,10 @@ python test.py  --method zhang2016 --input <img>
 
 **运行命令：**
 ```bash
-python train.py --method inst2020 --stage full     --dataset imagenet_mini
-python train.py --method inst2020 --stage instance --dataset imagenet_mini
-python train.py --method inst2020 --stage fusion   --dataset imagenet_mini
-python test.py  --method inst2020 --input <img>
+python train.py --method inst_fusion --stage full     --dataset imagenet_mini
+python train.py --method inst_fusion --stage instance --dataset imagenet_mini
+python train.py --method inst_fusion --stage fusion   --dataset imagenet_mini
+python test.py  --method inst_fusion --test_img_dir data/test
 ```
 
 ---
@@ -68,8 +68,8 @@ python test.py  --method inst2020 --input <img>
 
 **运行命令：**
 ```bash
-python test.py --method zhang2016 --exemplar --ref_img <ref>  --input <img>
-python test.py --method inst2020  --exemplar --ref_img <ref>  --input <img>
+python test.py --method cnn_color   --exemplar --ref_img <ref> --test_img_dir data/test
+python test.py --method inst_fusion --exemplar --ref_img <ref> --test_img_dir data/test
 ```
 
 ---
@@ -78,24 +78,24 @@ python test.py --method inst2020  --exemplar --ref_img <ref>  --input <img>
 
 | 组件 | Phase 1 | Phase 2 | Phase 3 |
 |------|---------|---------|---------|
-| 全局 CNN（Zhang2016Generator） | ✓ | ✓（骨干复用） | ✓ |
+| 全局 CNN（`CnnColorGenerator`） | ✓ | ✓（骨干复用） | ✓ |
 | ab 量化分类（313 bins） | ✓ | ✓ | ✓ |
 | Mask R-CNN | ✗ | ✓ | 同上 |
-| 融合 Attention（FusionGenerator） | ✗ | ✓ | 同上 |
-| Cross-Attention（ExemplarAttention） | ✗ | ✗ | ✓ |
+| 融合 Attention（`FusionGenerator`） | ✗ | ✓ | 同上 |
+| Cross-Attention（`ExemplarAttention`） | ✗ | ✗ | ✓ |
 
 ---
 
 ## 两篇论文技术要点速查
 
-### Zhang et al. 2016
+### Zhang et al. 2016（对应 `cnn_color`）
 - CIE Lab 空间，L → ab
 - ab 量化为 313 个色彩 bin，按经验分布重加权缓解灰色偏向
 - 推理用 annealed-mean（温度 T）从分布采样颜色
 - 损失：多项交叉熵
 
-### Su et al. 2020
-- 以 Zhang 2016 为骨干，增加实例分支
+### Su et al. 2020（对应 `inst_fusion`）
+- 以 `cnn_color` 为骨干，增加实例分支
 - Mask R-CNN 检测实例 → crop 256×256 → 独立上色 → 融合
 - 融合：`f̃ = f_full ⊙ W_F + Σ f_inst_i ⊙ W_i`（逐像素加权求和）
 - 损失：Smooth-L1

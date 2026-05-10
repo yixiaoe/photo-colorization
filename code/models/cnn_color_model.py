@@ -1,10 +1,10 @@
-"""Phase 2 model placeholder — network implemented in Task-08."""
+"""Phase 1 model placeholder — network implemented in Task-05."""
 from .base_model import BaseModel
 
 
-class Inst2020Model(BaseModel):
+class CnnColorModel(BaseModel):
     def name(self):
-        return 'Inst2020Model'
+        return 'CnnColorModel'
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
@@ -12,7 +12,7 @@ class Inst2020Model(BaseModel):
 
     def initialize(self, opt):
         super().initialize(opt)
-        self.model_names = []   # filled in Task-08
+        self.model_names = []   # filled in Task-05
 
     def set_input(self, data):
         pass

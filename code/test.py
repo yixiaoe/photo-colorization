@@ -2,13 +2,13 @@
 
 Usage:
   # Phase 1
-  python test.py --method zhang2016 --test_img_dir data/test
+  python test.py --method cnn_color --test_img_dir data/test
 
   # Phase 2
-  python test.py --method inst2020 --test_img_dir data/test
+  python test.py --method inst_fusion --test_img_dir data/test
 
   # Phase 3 Bonus (exemplar)
-  python test.py --method zhang2016 --exemplar --ref_img ref.jpg --test_img_dir data/test
+  python test.py --method cnn_color --exemplar --ref_img ref.jpg --test_img_dir data/test
 """
 import os
 import torch

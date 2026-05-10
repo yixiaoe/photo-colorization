@@ -2,12 +2,12 @@
 
 Usage:
   # Phase 1
-  python train.py --method zhang2016 --dataset imagenet_mini --data_dir data/train
+  python train.py --method cnn_color --dataset imagenet_mini --data_dir data/train
 
   # Phase 2 (run full → instance → fusion in order)
-  python train.py --method inst2020 --stage full     --data_dir data/train
-  python train.py --method inst2020 --stage instance --data_dir data/train
-  python train.py --method inst2020 --stage fusion   --data_dir data/train
+  python train.py --method inst_fusion --stage full     --data_dir data/train
+  python train.py --method inst_fusion --stage instance --data_dir data/train
+  python train.py --method inst_fusion --stage fusion   --data_dir data/train
 """
 import time
 import torch
@@ -30,8 +30,7 @@ def main():
         drop_last=True,
     )
 
-    # route to the right model class
-    opt.model = opt.method   # zhang2016 or inst2020
+    opt.model = opt.method   # cnn_color or inst_fusion
     model = create_model(opt)
     model.train()
 

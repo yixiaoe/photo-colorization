@@ -21,8 +21,8 @@ class BaseOptions():
         parser.add_argument('--max_dataset_size', type=int, default=float('inf'))
 
         # ── model ─────────────────────────────────────────────────────────
-        parser.add_argument('--method', type=str, default='zhang2016',
-                            choices=['zhang2016', 'inst2020'],
+        parser.add_argument('--method', type=str, default='cnn_color',
+                            choices=['cnn_color', 'inst_fusion'],
                             help='colorization method')
         parser.add_argument('--ngf', type=int, default=64)
         parser.add_argument('--norm', type=str, default='batch',

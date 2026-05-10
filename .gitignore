@@ -8,7 +8,8 @@ CLAUDE.md
 .DS_Store
 
 # reference
-InstColorization-master(reference)/
+InstColorization-master—2020(reference)/
+official_colorization_2016(reference)/
 
 # python cache
 __pycache__/

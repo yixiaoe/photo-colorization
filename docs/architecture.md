@@ -1,6 +1,6 @@
 # 项目架构说明
 
-**更新日期：** 2026/05/09
+**更新日期：** 2026/05/10
 
 ---
 
@@ -10,7 +10,7 @@
 photo-colorization/
 ├── InstColorization-master(reference)/  # 参考实现（只读，不可修改）
 ├── code/                                # 项目代码（唯一开发区）
-├── opsx/                                # 计划/进度文档
+├── docs/                                # 计划/进度文档
 └── paper/                               # 论文 PDF
 ```
 
@@ -18,11 +18,11 @@ photo-colorization/
 
 ## 三阶段总体规划
 
-| Phase | 方法 | 核心技术 | Mask R-CNN | Attention |
-|-------|------|---------|-----------|-----------|
-| Phase 1 | Zhang et al. 2016 | 全局 CNN + ab 量化分类 | 否 | 否 |
-| Phase 2 | Su et al. CVPR 2020 | 双分支 + 融合权重（在 Phase 1 骨干上叠加） | 是（torchvision） | 是（融合权重） |
-| Phase 3 | Exemplar Bonus | Cross-Attention 色彩迁移（叠加于任意方法） | 同上 | 是（额外） |
+| Phase | 方法标识 | 核心技术 | Mask R-CNN | Attention |
+|-------|---------|---------|-----------|-----------|
+| Phase 1 | `cnn_color` | 全局 CNN + ab 量化分类（Zhang et al. 2016） | 否 | 否 |
+| Phase 2 | `inst_fusion` | 双分支 + 融合权重，在 Phase 1 骨干上叠加（Su et al. CVPR 2020） | 是（torchvision） | 是（融合权重） |
+| Phase 3 | `--exemplar` | Cross-Attention 色彩迁移，叠加于任意方法 | 同上 | 是（额外） |
 
 ---
 
@@ -30,27 +30,27 @@ photo-colorization/
 
 ```
 code/
-├── train.py                     # 训练主入口（--method / --stage）
-├── test.py                      # 推理主入口（--method / --exemplar）
+├── train.py                       # 训练主入口（--method / --stage）
+├── test.py                        # 推理主入口（--method / --exemplar）
 ├── options/
-│   ├── base_options.py          # 基础参数（dataset、name、fineSize 等）
-│   └── train_options.py         # 训练/推理参数（method、stage、exemplar）
+│   ├── base_options.py            # 基础参数（dataset、name、fineSize 等）
+│   └── train_options.py           # 训练/推理参数（method、stage、exemplar）
 ├── models/
-│   ├── __init__.py              # 按 --method 动态加载模型
-│   ├── base_model.py            # 基类（save/load/scheduler）
-│   ├── zhang2016_model.py       # Phase 1：全图上色训练/推理逻辑
-│   ├── inst2020_model.py        # Phase 2：三阶段训练/融合推理逻辑
-│   └── networks.py              # 所有网络结构定义（见下方说明）
+│   ├── __init__.py                # 按 --method 动态加载模型
+│   ├── base_model.py              # 基类（save/load/scheduler）
+│   ├── cnn_color_model.py         # Phase 1：全图上色训练/推理逻辑
+│   ├── inst_fusion_model.py       # Phase 2：三阶段训练/融合推理逻辑
+│   └── networks.py                # 所有网络结构定义（见下方说明）
 ├── datasets/
-│   └── colorization_dataset.py  # 统一 Dataset（支持 zhang2016 / inst2020）
+│   └── colorization_dataset.py   # 统一 Dataset（支持 cnn_color / inst_fusion）
 ├── util/
-│   ├── util.py                  # Lab/RGB 转换、313-bin 量化、color 工具
-│   └── visualizer.py            # TensorBoard 可视化
+│   ├── util.py                    # Lab/RGB 转换、313-bin 量化、color 工具
+│   └── visualizer.py              # TensorBoard 可视化
 └── scripts/
-    ├── train_phase1.sh          # Phase 1 单阶段训练
-    ├── train_phase2.sh          # Phase 2 三阶段训练编排
-    ├── test.sh                  # 推理（支持所有方法组合）
-    └── setup.sh                 # 环境验证脚本
+    ├── train_phase1.sh            # Phase 1 单阶段训练
+    ├── train_phase2.sh            # Phase 2 三阶段训练编排
+    ├── test.sh                    # 推理（支持所有方法组合）
+    └── setup.sh                   # 环境验证脚本
 ```
 
 ---
@@ -59,8 +59,8 @@ code/
 
 | 类名 | 所属 Phase | 说明 |
 |------|-----------|------|
-| `Zhang2016Generator` | Phase 1 | 全局 CNN，L → 313 ab bins |
-| `SIGGRAPHGenerator` | Phase 2 骨干 | 继承/复用 Zhang2016Generator |
+| `CnnColorGenerator` | Phase 1 | 全局 CNN，L → 313 ab bins |
+| `InstFusionGenerator` | Phase 2 骨干 | 继承/复用 CnnColorGenerator |
 | `FusionGenerator` | Phase 2 | 3-conv 融合权重预测 |
 | `WeightGenerator` | Phase 2 | 实例与全图权重融合 |
 | `ExemplarAttention` | Phase 3 | Cross-Attention 色彩迁移模块 |
@@ -94,7 +94,7 @@ code/
 ```
 彩色图 → Lab 转换 → L 通道（输入）
                               │
-                    Zhang2016Generator
+                    CnnColorGenerator
                               │
                     313 ab bins 概率图
                               │
@@ -110,10 +110,10 @@ code/
 ```
 彩色图 → Lab 转换 → L 通道（输入）
           │
-          ├── 全图分支（SIGGRAPHGenerator）─────────────┐
+          ├── 全图分支（InstFusionGenerator）────────────┐
           │                                              ▼
           └── 实例分支（torchvision Mask R-CNN → crop）  FusionGenerator
-               └── SIGGRAPHGenerator（256×256 crop）  ──┘
+               └── InstFusionGenerator（256×256 crop）──┘
                                                           │
                                                逐像素融合权重（WeightGenerator）
                                                           │
@@ -148,6 +148,6 @@ code/
 
 ## 关键设计原则
 
-1. **Phase 2 骨干复用 Phase 1**：`SIGGRAPHGenerator` 直接加载 Phase 1 训练好的权重，不从头训练
+1. **Phase 2 骨干复用 Phase 1**：`InstFusionGenerator` 直接加载 Phase 1 训练好的权重，不从头训练
 2. **Mask R-CNN 不是硬前置**：仅 Phase 2 instance/fusion 阶段使用，在线调用，无需离线预计算
 3. **Phase 3 按需叠加**：通过 `--exemplar` flag 激活，不影响 Phase 1/2 的主逻辑

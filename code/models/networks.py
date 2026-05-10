@@ -4,3 +4,5 @@
 def define_G(opt):
     """Return the generator network for the chosen method."""
     raise NotImplementedError("Networks not yet implemented (Task-05/08)")
+    # cnn_color: Task-05
+    # inst_fusion: Task-08
