@@ -83,6 +83,7 @@ python test.py --method inst_fusion --exemplar --ref_img <ref> --test_img_dir da
 | Mask R-CNN | ✗ | ✓ | 同上 |
 | 融合 Attention（`FusionGenerator`） | ✗ | ✓ | 同上 |
 | Cross-Attention（`ExemplarAttention`） | ✗ | ✗ | ✓ |
+| 分支间风格协调（`StyleHarmonizer`） | ✗ | ✗ | 可选（`--harmonize`，仅 inst_fusion） |
 
 ---
 

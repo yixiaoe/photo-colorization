@@ -64,6 +64,7 @@ code/
 | `FusionGenerator` | Phase 2 | 3-conv 融合权重预测 |
 | `WeightGenerator` | Phase 2 | 实例与全图权重融合 |
 | `ExemplarAttention` | Phase 3 | Cross-Attention 色彩迁移模块 |
+| `StyleHarmonizer` | Phase 3（inst_fusion） | 分支间 Cross-Attention，实例风格向全图风格对齐（创新点） |
 
 ---
 
@@ -124,14 +125,32 @@ code/
 
 ## Phase 3 数据流（Bonus，叠加于 Phase 1 或 Phase 2）
 
+**cnn_color + exemplar：**
 ```
 灰度图（L）          参考风格图
     │                    │
-特征提取         Color Palette 提取
-    │                    │（色彩 patch embedding）
-    └────── Cross-Attention ──────┘
+CnnColorGenerator    Color Palette 提取
+    │（深层特征）         │（patch embedding）
+    └──── ExemplarAttention ────┘
                    │
-             上色输出（RGB）
+             ab 输出 → RGB
+```
+
+**inst_fusion + exemplar：**
+```
+参考风格图 → Color Palette
+              ↙                    ↘
+全图分支 ExemplarAttention    实例分支 ExemplarAttention
+              ↓                         ↓
+         F_full（全局风格）         F_inst（实例风格）
+                   ↘                  ↙
+         [--harmonize] StyleHarmonizer（可选，创新点）
+                    F_inst 以 F_full 为 K/V 做 Cross-Attention
+                    实例风格向全局风格空间对齐
+                         ↓
+                  FusionGenerator
+                         │
+                   ab 输出 → RGB
 ```
 
 ---

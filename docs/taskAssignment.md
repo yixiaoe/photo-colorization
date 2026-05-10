@@ -136,12 +136,13 @@
 
 ---
 
-### Task-11：[P3] ExemplarAttention 模块
-**文件：** `code/models/networks.py`（新增 `ExemplarAttention`）  
+### Task-11：[P3] ExemplarAttention + StyleHarmonizer 模块
+**文件：** `code/models/networks.py`（新增 `ExemplarAttention`、`StyleHarmonizer`）  
 **内容：**
-- 输入：灰度图特征 + 参考图 Color Palette（色彩 patch embedding）
-- Cross-Attention：将参考色彩迁移至灰度图语义区域
-- 可插入 `cnn_color_model.py` 或 `inst_fusion_model.py` 两条路径
+- `ExemplarAttention`：从参考图提取 Color Palette（色彩 patch embedding），通过 Cross-Attention 迁移至灰度图语义区域
+- `cnn_color + exemplar`：Cross-Attention 插入一次（深层特征处）
+- `inst_fusion + exemplar`：全图分支与实例分支各调用一次 `ExemplarAttention`，再接 `StyleHarmonizer`
+- `StyleHarmonizer`（**创新点，可选**）：两分支完成 Cross-Attention 后，以全图分支特征为 K/V，实例分支特征为 Q，做一次分支间 Cross-Attention，使实例色彩风格向全局风格空间对齐，再送入 `FusionGenerator`；通过 `--harmonize` flag 启用，不开启时两分支特征直接进入 `FusionGenerator`
 
 ---
 
@@ -150,3 +151,4 @@
 **内容：**
 - 验证：切换不同参考图，输出颜色风格随之变化
 - 定性对比：同一灰度图 + 不同参考图 → 颜色差异显著
+- 消融对比：`inst_fusion + exemplar（无 StyleHarmonizer）` vs `inst_fusion + exemplar（有 StyleHarmonizer）`，验证分支间风格协调效果

@@ -55,5 +55,7 @@ class TestOptions(BaseOptions):
                             help='enable exemplar-based colorization (Phase 3)')
         parser.add_argument('--ref_img', type=str, default='',
                             help='path to reference style image (--exemplar mode)')
+        parser.add_argument('--harmonize', action='store_true',
+                            help='enable StyleHarmonizer between branches (inst_fusion + exemplar only)')
 
         return parser
