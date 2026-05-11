@@ -26,7 +26,6 @@ import torch.nn.functional as F
 from .base_model import BaseModel
 from ..datasets.colorization_dataset import lab_tensors_to_rgb_tensor   # visualisation only
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  ab quantization — 313 in-gamut bin centres
 # ─────────────────────────────────────────────────────────────────────────────
