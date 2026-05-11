@@ -61,56 +61,82 @@ def lab2rgb(lab_rs, opt):
     return xyz2rgb(lab2xyz(torch.cat([l, ab], dim=1)))
 
 
-# ── ab quantisation ───────────────────────────────────────────────────────────
+# ── Zhang 2016 313-bin utilities ──────────────────────────────────────────────
 
-def encode_ab_ind(data_ab, opt):
-    """Nx2xHxW ∈ [-1,1]  →  Nx1xHxW index ∈ [0, Q)"""
-    data_ab_rs = torch.round((data_ab * opt.ab_norm + opt.ab_max) / opt.ab_quant)
-    return data_ab_rs[:, [0]] * opt.A + data_ab_rs[:, [1]]
+_RESOURCE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                             'resources', 'zhang2016')
 
 
-def decode_ind_ab(data_q, opt):
-    """Nx1xHxW index  →  Nx2xHxW ∈ [-1,1]"""
-    data_a = (data_q // opt.A).float()
-    data_b = (data_q  % opt.A).float()
-    ab = torch.cat([data_a, data_b], dim=1)
-    return (ab * opt.ab_quant - opt.ab_max) / opt.ab_norm
+def load_zhang2016_ab_bins():
+    """Load (313, 2) array of ab cluster centres."""
+    path = os.path.join(_RESOURCE_DIR, 'pts_in_hull.npy')
+    return np.load(path).astype(np.float32)
 
 
-def decode_max_ab(data_ab_quant, opt):
-    """NxQxHxW → Nx2xHxW  (argmax decoding)"""
-    data_q = torch.argmax(data_ab_quant, dim=1, keepdim=True)
-    return decode_ind_ab(data_q, opt)
+def load_zhang2016_prior_probs():
+    """Load (313,) empirical prior probability over ab bins."""
+    path = os.path.join(_RESOURCE_DIR, 'prior_probs.npy')
+    return np.load(path).astype(np.float32)
 
 
-def decode_mean(data_ab_quant, opt):
-    """NxQxHxW → Nx2xHxW  (mean decoding)"""
-    N, Q, H, W = data_ab_quant.shape
-    a_range = torch.arange(-opt.ab_max, opt.ab_max + opt.ab_quant,
-                           step=opt.ab_quant, device=data_ab_quant.device
-                           ).float()[None, :, None, None]
-    quant = data_ab_quant.view(N, int(opt.A), int(opt.A), H, W)
-    a_inf = torch.sum(torch.sum(quant, dim=2) * a_range, dim=1, keepdim=True)
-    b_inf = torch.sum(torch.sum(quant, dim=1) * a_range, dim=1, keepdim=True)
-    return torch.cat([a_inf, b_inf], dim=1) / opt.ab_norm
+def build_zhang2016_rebalance_weights(gamma=0.5, device='cpu'):
+    """
+    Compute per-class rebalance weights from the empirical ab prior.
+    w = 1 / prior_mix,  prior_mix = (1-γ)*p + γ*(1/313)
+    Returns Tensor (313,) on device.
+    """
+    prior = load_zhang2016_prior_probs()
+    Q = prior.shape[0]
+    uni = np.ones(Q, dtype=np.float32) / Q
+    prior_mix = (1 - gamma) * prior + gamma * uni
+    # avoid div-by-zero for bins that never appear
+    prior_mix = np.clip(prior_mix, 1e-8, None)
+    weights = 1.0 / prior_mix
+    weights = weights / np.sum(prior * weights)   # re-normalise expectation to 1
+    return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
-def get_colorization_data(data_raw, opt, ab_thresh=5.):
-    """Convert raw RGB tensor to {'A': L, 'B': ab} in normalised Lab space."""
-    data = {}
-    data_lab = rgb2lab(data_raw, opt)
-    data['A'] = data_lab[:, [0]]      # L channel
-    data['B'] = data_lab[:, 1:]       # ab channels
-    if ab_thresh > 0:
-        thresh = ab_thresh / opt.ab_norm
-        ab_range = (torch.max(data['B'].flatten(2), dim=2)[0]
-                    - torch.min(data['B'].flatten(2), dim=2)[0])
-        mask = ab_range.sum(dim=1) >= thresh
-        data['A'] = data['A'][mask]
-        data['B'] = data['B'][mask]
-        if data['A'].shape[0] == 0:
-            return None
-    return data
+def encode_ab_to_zhang2016_bins(ab_norm, pts_in_hull, ab_norm_val=110.):
+    """
+    Encode normalised ab tensor to nearest-neighbour bin indices.
+
+    Args:
+        ab_norm:     Nx2xHxW  in [-1, 1]  (i.e. actual_ab / ab_norm_val)
+        pts_in_hull: (313, 2) Tensor of ab cluster centres in raw ab units
+        ab_norm_val: scalar used to normalise (default 110.)
+    Returns:
+        Nx1xHxW  int64 class indices in [0, 312]
+    """
+    N, _, H, W = ab_norm.shape
+    ab = ab_norm * ab_norm_val                     # → raw ab  Nx2xHxW
+    ab_flat = ab.permute(0, 2, 3, 1).reshape(-1, 2)   # (N*H*W, 2)
+    # nearest neighbour via L2 distance
+    pts = pts_in_hull.to(ab_flat.device)           # (313, 2)
+    dists = torch.cdist(ab_flat.float(), pts.float())  # (N*H*W, 313)
+    idx = dists.argmin(dim=1)                      # (N*H*W,)
+    return idx.reshape(N, 1, H, W)
+
+
+def decode_zhang2016_annealed_mean(logits, pts_in_hull, T=0.38, ab_norm_val=110.):
+    """
+    Annealed-mean decoding: softmax(logits / T) weighted sum over cluster centres.
+
+    Args:
+        logits:      Nx313xHxW  raw network output
+        pts_in_hull: (313, 2) Tensor
+        T:           temperature (default 0.38 per Zhang et al.)
+        ab_norm_val: value used to normalise output to [-1, 1]
+    Returns:
+        Nx2xHxW  ab predictions in [-1, 1]
+    """
+    N, Q, H, W = logits.shape
+    probs = torch.softmax(logits.float() / T, dim=1)        # Nx313xHxW, float32
+    pts = pts_in_hull.to(device=logits.device, dtype=torch.float32)  # (313, 2)
+    # weighted sum: (N, 313, H*W) x (313, 2) → (N, H*W, 2)
+    probs_flat = probs.view(N, Q, H * W).permute(0, 2, 1)  # (N, H*W, 313)
+    ab_flat = torch.matmul(probs_flat, pts)                 # (N, H*W, 2)
+    ab = ab_flat.permute(0, 2, 1).view(N, 2, H, W)         # (N, 2, H, W)
+    return ab / ab_norm_val
 
 
 # ── image I/O helpers ─────────────────────────────────────────────────────────

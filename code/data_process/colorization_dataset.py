@@ -308,9 +308,10 @@ class TestDataset(Data.Dataset):
         pil_img = _load_rgb(path)
         file_id = os.path.splitext(os.path.basename(path))[0]
 
-        full_img = self.tfm(pil_img)
+        rgb_img, gray_img = _to_gray_rgb(pil_img)
         output = {
-            'full_img': full_img.unsqueeze(0),
+            'rgb_img':  self.tfm(rgb_img),
+            'gray_img': self.tfm(gray_img),
             'file_id':  file_id,
             'empty_box': True,
         }

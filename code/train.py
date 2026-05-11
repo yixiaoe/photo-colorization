@@ -12,8 +12,11 @@ Usage:
 import time
 import torch
 
+from util.check_deps import ensure_requirements
+ensure_requirements()
+
 from options.train_options import TrainOptions
-from datasets.colorization_dataset import create_dataset
+from data_process.colorization_dataset import create_dataset
 from models import create_model
 from util.visualizer import Visualizer
 
@@ -36,26 +39,40 @@ def main():
 
     visualizer = Visualizer(opt)
     total_iters = 0
+    avg_losses  = {}           # EMA-smoothed losses for console display
 
     for epoch in range(opt.epoch_count, opt.niter + opt.niter_decay):
+        epoch_start = time.time()
+
         for i, data in enumerate(loader):
             total_iters += 1
             model.set_input(data)
             model.optimize_parameters()
 
+            losses = model.get_current_losses()
+
+            # EMA smoothing
+            alpha = opt.avg_loss_alpha
+            for k, v in losses.items():
+                avg_losses[k] = alpha * avg_losses.get(k, v) + (1 - alpha) * v
+
             if total_iters % opt.print_freq == 0:
-                losses = model.get_current_losses()
-                loss_str = '  '.join(f'{k}: {v:.4f}' for k, v in losses.items())
-                print(f'[epoch {epoch}  iter {total_iters}]  {loss_str}')
-                visualizer.plot_losses(losses, total_iters)
+                loss_str = '  '.join(f'{k}: {v:.4f}' for k, v in avg_losses.items())
+                print(f'[epoch {epoch+1}  iter {total_iters}]  {loss_str}')
+                visualizer.plot_losses(avg_losses, total_iters)
 
             if total_iters % opt.save_latest_freq == 0:
                 model.save_networks('latest')
+                # log visual samples to TensorBoard
+                visuals = model.get_current_visuals()
+                visualizer.plot_images(visuals, total_iters)
 
         if (epoch + 1) % opt.save_epoch_freq == 0:
             model.save_networks(epoch + 1)
 
         model.update_learning_rate()
+        elapsed = time.time() - epoch_start
+        print(f'Epoch {epoch+1} done in {elapsed:.0f}s')
 
     visualizer.close()
     print('Training complete.')

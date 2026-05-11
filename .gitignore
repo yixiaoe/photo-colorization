@@ -1,8 +1,9 @@
 # claude
 CLAUDE.md
 
-# vscode
+# IDE
 .vscode/
+.idea/
 
 # macOS
 .DS_Store
@@ -10,6 +11,11 @@ CLAUDE.md
 # reference
 InstColorization-master—2020(reference)/
 official_colorization_2016(reference)/
+
+# data / outputs (server-side only)
+code/datasets/
+code/checkpoints/
+code/results/
 
 # python cache
 __pycache__/

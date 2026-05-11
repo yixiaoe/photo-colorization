@@ -1,7 +1,7 @@
 # 子任务分配表
 
 **项目名称：** 黑白照片上色（三阶段）  
-**更新日期：** 2026/05/10（Task-02/03/04 已完成，负责人：Yi_CC）
+**更新日期：** 2026/05/10（Task-02/03/04/05/06/07 已完成）
 
 ---
 
@@ -13,9 +13,9 @@
 | Task-02 | code/ 目录骨架搭建 | 准备 | Yi_CC | ☑ 已完成 | Task-01 |
 | Task-03 | options 参数体系 | 准备 | Yi_CC | ☑ 已完成 | Task-02 |
 | Task-04 | 数据集管线 | 准备 | Yi_CC | ☑ 已完成 | Task-03 |
-| Task-05 | [P1] CnnColorGenerator 网络实现 | Phase 1 | | ☐ 未开始 | Task-03 |
-| Task-06 | [P1] 训练打通（全图上色） | Phase 1 | | ☐ 未开始 | Task-04, Task-05 |
-| Task-07 | [P1] 推理闭环与评测 | Phase 1 | | ☐ 未开始 | Task-06 |
+| Task-05 | [P1] CnnColorGenerator 网络实现 | Phase 1 | Yi_CC | ☑ 已完成 | Task-03 |
+| Task-06 | [P1] 训练打通（全图上色） | Phase 1 | Yi_CC | ☑ 已完成 | Task-04, Task-05 |
+| Task-07 | [P1] 推理闭环与评测 | Phase 1 | Yi_CC | ☑ 已完成 | Task-06 |
 | Task-08 | [P2] 双分支网络迁移 | Phase 2 | | ☐ 未开始 | Task-07 |
 | Task-09 | [P2] 三阶段训练打通 | Phase 2 | | ☐ 未开始 | Task-04, Task-08 |
 | Task-10 | [P2] 推理闭环与评测 | Phase 2 | | ☐ 未开始 | Task-09 |
