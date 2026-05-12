@@ -20,10 +20,7 @@ class CnnColorModel(BaseModel):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--T', type=float, default=0.38,
-                            help='annealed-mean temperature for inference decoding')
-        parser.add_argument('--rebalance_gamma', type=float, default=0.5,
-                            help='prior-mix gamma for class rebalance weights')
+        # --T and --rebalance_gamma are defined in train_options.py / test_options.py
         return parser
 
     def initialize(self, opt):
@@ -109,11 +106,10 @@ class CnnColorModel(BaseModel):
           'real_rgb':  ground-truth colour image
         """
         with torch.no_grad():
-            # decode: annealed-mean at temperature T
-            T = getattr(self.opt, 'T', 0.38)
+            # decode: annealed-mean at temperature T (default from resources/defaults.py)
             pred_ab = decode_zhang2016_annealed_mean(
                 self.pred_ab_logits, self.pts_in_hull,
-                T=T, ab_norm_val=self.opt.ab_norm)   # (N, 2, H/4, W/4)
+                T=self.opt.T, ab_norm_val=self.opt.ab_norm)   # (N, 2, H/4, W/4)
 
             # upsample ab back to full resolution
             H, W = self.real_L.shape[2], self.real_L.shape[3]

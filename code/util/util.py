@@ -79,7 +79,7 @@ def load_zhang2016_prior_probs():
     return np.load(path).astype(np.float32)
 
 
-def build_zhang2016_rebalance_weights(gamma=0.5, device='cpu'):
+def build_zhang2016_rebalance_weights(gamma, device='cpu'):
     """
     Compute per-class rebalance weights from the empirical ab prior.
     w = 1 / prior_mix,  prior_mix = (1-γ)*p + γ*(1/313)
@@ -117,14 +117,14 @@ def encode_ab_to_zhang2016_bins(ab_norm, pts_in_hull, ab_norm_val=110.):
     return idx.reshape(N, 1, H, W)
 
 
-def decode_zhang2016_annealed_mean(logits, pts_in_hull, T=0.38, ab_norm_val=110.):
+def decode_zhang2016_annealed_mean(logits, pts_in_hull, T, ab_norm_val=110.):
     """
     Annealed-mean decoding: softmax(logits / T) weighted sum over cluster centres.
 
     Args:
         logits:      Nx313xHxW  raw network output
         pts_in_hull: (313, 2) Tensor
-        T:           temperature (default 0.38 per Zhang et al.)
+        T:           temperature (0.38 per Zhang et al.)
         ab_norm_val: value used to normalise output to [-1, 1]
     Returns:
         Nx2xHxW  ab predictions in [-1, 1]

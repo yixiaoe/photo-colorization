@@ -1,4 +1,5 @@
 from .base_options import BaseOptions
+from resources.defaults import T, REBALANCE_GAMMA
 
 
 class TrainOptions(BaseOptions):
@@ -24,9 +25,9 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--epoch_count', type=int, default=0)
 
         # ── Phase 1 specific ─────────────────────────────────────────────
-        parser.add_argument('--T', type=float, default=0.38,
+        parser.add_argument('--T', type=float, default=T,
                             help='annealed-mean temperature for inference decoding')
-        parser.add_argument('--rebalance_gamma', type=float, default=0.5,
+        parser.add_argument('--rebalance_gamma', type=float, default=REBALANCE_GAMMA,
                             help='prior-mix gamma for class rebalance weights')
 
         # ── logging ───────────────────────────────────────────────────────
@@ -47,9 +48,9 @@ class TestOptions(BaseOptions):
         parser = super().initialize(parser)
         self.isTrain = False
 
-        parser.add_argument('--T', type=float, default=0.38,
+        parser.add_argument('--T', type=float, default=T,
                             help='annealed-mean temperature for inference decoding')
-        parser.add_argument('--rebalance_gamma', type=float, default=0.5)
+        parser.add_argument('--rebalance_gamma', type=float, default=REBALANCE_GAMMA)
         parser.add_argument('--test_img_dir', type=str, default='data/test',
                             help='folder of test images')
         parser.add_argument('--results_img_dir', type=str, default='results/images',
