@@ -16,8 +16,8 @@
 | Task-05 | [P1] CnnColorGenerator 网络实现 | Phase 1 | Yi_CC | ☑ 已完成 | Task-03 |
 | Task-06 | [P1] 训练打通（全图上色） | Phase 1 | Yi_CC | ☑ 已完成 | Task-04, Task-05 |
 | Task-07 | [P1] 推理闭环与评测 | Phase 1 | Yi_CC | ☑ 已完成 | Task-06 |
-| Task-08 | [P2] 双分支网络迁移 | Phase 2 | | ☐ 未开始 | Task-07 |
-| Task-09 | [P2] 三阶段训练打通 | Phase 2 | | ☐ 未开始 | Task-04, Task-08 |
+| Task-08 | [P2] 双分支网络迁移 | Phase 2 | Leo_Zan | ☑ 已完成 | Task-07 |
+| Task-09 | [P2] 三阶段训练打通 | Phase 2 | Leo_Zan | ☑ 已完成 | Task-04, Task-08 |
 | Task-10 | [P2] 推理闭环与评测 | Phase 2 | | ☐ 未开始 | Task-09 |
 | Task-11 | [P3] ExemplarAttention 模块 | Phase 3 | | ☐ 未开始 | Task-07 |
 | Task-12 | [P3] Exemplar 推理验证 | Phase 3 | | ☐ 未开始 | Task-11 |

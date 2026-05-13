@@ -10,6 +10,7 @@ Usage:
   python train.py --method inst_fusion --stage fusion   --data_dir data/train
 """
 import time
+import os
 import torch
 
 from util.check_deps import ensure_requirements
@@ -23,6 +24,7 @@ from util.visualizer import Visualizer
 
 def main():
     opt = TrainOptions().parse()
+    smoke_test_iters = int(os.environ.get('SMOKE_TEST_ITERS', '0'))
 
     dataset = create_dataset(opt, stage=opt.stage, split='train')
     loader  = torch.utils.data.DataLoader(
@@ -34,6 +36,11 @@ def main():
     )
 
     opt.model = opt.method   # cnn_color or inst_fusion
+    if opt.method == 'inst_fusion':
+        # stage-wise checkpoint linkage for Task-09
+        opt.phase1_name = os.environ.get('PHASE1_NAME', 'cnn_color')
+        opt.full_stage_name = os.environ.get('FULL_STAGE_NAME', 'inst_fusion_full')
+        opt.instance_stage_name = os.environ.get('INSTANCE_STAGE_NAME', 'inst_fusion_instance')
     model = create_model(opt)
     model.train()
 
@@ -66,6 +73,12 @@ def main():
                 # log visual samples to TensorBoard
                 visuals = model.get_current_visuals()
                 visualizer.plot_images(visuals, total_iters)
+
+            if smoke_test_iters > 0 and total_iters >= smoke_test_iters:
+                model.save_networks('latest')
+                print(f'Smoke test reached {smoke_test_iters} iterations, checkpoint saved.')
+                visualizer.close()
+                return
 
         if (epoch + 1) % opt.save_epoch_freq == 0:
             model.save_networks(epoch + 1)

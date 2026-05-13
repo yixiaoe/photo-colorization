@@ -116,32 +116,74 @@ class CnnColorGenerator(nn.Module):
 
 
 # ── Phase 2 placeholders (Task-08) ───────────────────────────────────────────
+class FusionGenerator(nn.Module):
+    """3-conv pixel-wise fusion weight predictor."""
+    def __init__(self, in_ch=512, hidden_ch=128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, hidden_ch, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_ch, hidden_ch // 2, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_ch // 2, 1, kernel_size=3, stride=1, padding=1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, inst_feat, full_feat):
+        return self.net(torch.cat([inst_feat, full_feat], dim=1))
+
+
+class WeightGenerator(nn.Module):
+    """Weighted merge of instance/full predictions."""
+    def forward(self, inst_pred, full_pred, weight_map):
+        return inst_pred * weight_map + full_pred * (1.0 - weight_map)
+
 
 class InstFusionGenerator(nn.Module):
-    """Dual-branch backbone — implemented in Task-08."""
+    """Dual-branch network that reuses Phase-1 backbone for full/instance fusion."""
     def __init__(self):
         super().__init__()
-        raise NotImplementedError("Task-08")
+        self.full_branch = CnnColorGenerator()
+        self.inst_branch = CnnColorGenerator()
 
+        self.full_head = nn.Sequential(nn.Conv2d(256, 2, kernel_size=1), nn.Tanh())
+        self.inst_head = nn.Sequential(nn.Conv2d(256, 2, kernel_size=1), nn.Tanh())
 
-class FusionGenerator(nn.Module):
-    """3-conv fusion weight predictor — implemented in Task-08."""
-    def __init__(self):
-        super().__init__()
-        raise NotImplementedError("Task-08")
+        self.fusion = FusionGenerator(in_ch=512)
+        self.weight_fuser = WeightGenerator()
+
+    def load_phase1_weights(self, state_dict, strict=False):
+        self.full_branch.load_state_dict(state_dict, strict=strict)
+        self.inst_branch.load_state_dict(state_dict, strict=strict)
+
+    def forward(self, full_L, inst_L=None, inst_ab_map=None):
+        full_feat = self.full_branch.get_features(full_L)
+        full_ab = self.full_head(full_feat)
+        if inst_L is None and inst_ab_map is None:
+            return full_ab
+
+        if inst_ab_map is None:
+            inst_feat = self.inst_branch.get_features(inst_L)
+            inst_ab = self.inst_head(inst_feat)
+        else:
+            inst_ab = inst_ab_map
+            inst_feat = full_feat
+
+        w = self.fusion(inst_feat, full_feat)
+        return self.weight_fuser(inst_ab, full_ab, w)
 
 
 # ── Phase 3 placeholders (Task-11) ───────────────────────────────────────────
 
 class ExemplarAttention(nn.Module):
-    """Cross-Attention colour transfer — implemented in Task-11."""
+    """Cross-Attention colour transfer - implemented in Task-11."""
     def __init__(self):
         super().__init__()
         raise NotImplementedError("Task-11")
 
 
 class StyleHarmonizer(nn.Module):
-    """Inter-branch Cross-Attention (--harmonize) — implemented in Task-11."""
+    """Inter-branch Cross-Attention (--harmonize) - implemented in Task-11."""
     def __init__(self):
         super().__init__()
         raise NotImplementedError("Task-11")
@@ -153,4 +195,6 @@ def define_G(opt):
     """Return the generator network for the chosen method."""
     if opt.method == 'cnn_color':
         return CnnColorGenerator()
+    if opt.method == 'inst_fusion':
+        return InstFusionGenerator()
     raise NotImplementedError(f"define_G: unknown method '{opt.method}' (Task-08 for inst_fusion)")
