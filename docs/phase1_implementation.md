@@ -1,7 +1,9 @@
 # Phase 1 实现说明
 
-**更新日期：** 2026/05/11  
+**更新日期：** 2026/05/18  
 **对应分支：** `feat/phase1-cnn-color`
+
+> **重要更新：** 损失函数已从硬标签 CrossEntropy 改为软编码 KL 散度 + 逐像素重平衡权重，与 Zhang 2016 完全对齐。编码函数重命名为 `encode_ab_bins_hard` / `encode_ab_bins_soft`，AMP 升级为 `torch.amp` API。
 
 ---
 

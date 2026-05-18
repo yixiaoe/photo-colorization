@@ -1,6 +1,6 @@
 # 项目架构说明
 
-**更新日期：** 2026/05/10
+**更新日期：** 2026/05/18
 
 ---
 
@@ -20,8 +20,8 @@ photo-colorization/
 
 | Phase | 方法标识 | 核心技术 | Mask R-CNN | Attention |
 |-------|---------|---------|-----------|-----------|
-| Phase 1 | `cnn_color` | 全局 CNN + ab 量化分类（Zhang et al. 2016） | 否 | 否 |
-| Phase 2 | `inst_fusion` | 双分支 + 融合权重，在 Phase 1 骨干上叠加（Su et al. CVPR 2020） | 是（torchvision） | 是（融合权重） |
+| Phase 1 | `cnn_color` | 全局 CNN + ab 软编码分类（Zhang et al. 2016） | 否 | 否 |
+| Phase 2 | `inst_fusion` | 双分支 + FiLM 语义调制 + 融合权重（Su et al. CVPR 2020 + 创新） | 是（torchvision） | 是（融合权重） |
 | Phase 3 | `--exemplar` | Cross-Attention 色彩迁移，叠加于任意方法 | 同上 | 是（额外） |
 
 ---
@@ -59,10 +59,12 @@ code/
 
 | 类名 | 所属 Phase | 说明 |
 |------|-----------|------|
-| `CnnColorGenerator` | Phase 1 | 全局 CNN，L → 313 ab bins |
-| `InstFusionGenerator` | Phase 2 骨干 | 继承/复用 CnnColorGenerator |
-| `FusionGenerator` | Phase 2 | 3-conv 融合权重预测 |
-| `WeightGenerator` | Phase 2 | 实例与全图权重融合 |
+| `CnnColorGenerator` | Phase 1 | 全局 CNN，L → 313 ab bins（Zhang 2016） |
+| `InstanceGenerator` | Phase 2 骨干 | 全图/实例共用架构，U-Net skip decoder |
+| `FiLMLayer` | Phase 2 | 逐通道 scale+shift 条件调制 |
+| `FiLMInstanceGenerator` | Phase 2 实例分支 | InstanceGenerator + conv4~7 FiLM 调制 |
+| `WeightGenerator` | Phase 2 融合 | 逐层 softmax 加权融合全图与实例特征 |
+| `FusionPipeline` | Phase 2 | 调度全图/实例/融合的完整推理流程 |
 | `ExemplarAttention` | Phase 3 | Cross-Attention 色彩迁移模块 |
 | `StyleHarmonizer` | Phase 3（inst_fusion） | 分支间 Cross-Attention，实例风格向全图风格对齐（创新点） |
 
@@ -84,9 +86,11 @@ code/
 
 ## 数据集约定
 
-- 使用 **ImageNet-Mini** 或 **CIFAR-10**
+- Phase 1/2 Stage-full：**ImageNet-Mini** 或 **CIFAR-10**，无需标注
+- Phase 2 Stage-instance：**COCO2017**，使用 GT bbox + GT label 裁剪实例
+- Phase 2 Stage-fusion：COCO2017 全图，在线 Mask R-CNN 检测
 - 彩色图 → CIE Lab 空间：L 通道为模型输入，ab 通道为预测目标
-- 无需外部标注，无需预计算 bbox npz 文件
+- 无需预计算 bbox npz 文件，bbox 全部在线生成
 
 ---
 
@@ -111,14 +115,16 @@ code/
 ```
 彩色图 → Lab 转换 → L 通道（输入）
           │
-          ├── 全图分支（InstFusionGenerator）────────────┐
-          │                                              ▼
-          └── 实例分支（torchvision Mask R-CNN → crop）  FusionGenerator
-               └── InstFusionGenerator（256×256 crop）──┘
-                                                          │
-                                               逐像素融合权重（WeightGenerator）
-                                                          │
-                                                     ab 通道 → RGB 输出
+          ├── Mask R-CNN → {bbox, label} × top-8
+          │
+          ├── 全图分支 InstanceGenerator（冻结）─────────────────────┐
+          │     └── 逐层输出特征                                      │
+          │                                                           ▼
+          └── 实例分支 FiLMInstanceGenerator（冻结）          WeightGenerator × N层
+               └── 裁剪实例 + label → FiLM 调制（conv4~7）    （逐层 softmax 加权融合）
+               └── 逐层输出特征 ────────────────────────────────────┘
+                                                                      │
+                                                                 ab 通道 → RGB 输出
 ```
 
 ---
@@ -157,11 +163,11 @@ CnnColorGenerator    Color Palette 提取
 
 ## Phase 2 训练三阶段
 
-| Stage | 输入 | 训练目标 | 初始权重 |
-|-------|------|---------|---------|
-| `full` | 全图 L 通道 | 全图上色分支 netG | Phase 1 权重或随机初始化 |
-| `instance` | 实例 crop L 通道 | 实例分支 netG | `full` 阶段权重 |
-| `fusion` | 全图 + bbox | 融合权重 netGF | `full` + `instance` 权重 |
+| Stage | 输入 | 可训练部分 | 初始权重 | 数据集 |
+|-------|------|----------|---------|--------|
+| `full` | 全图 L | InstanceGenerator | Phase 1 权重迁移 | ImageNet-Mini |
+| `instance` | 实例 crop L + label | FiLMInstanceGenerator（FiLM 层随机初始化） | full 权重 | COCO2017 |
+| `fusion` | 全图 + bbox + label | WeightGenerator × N层 + output_conv | full + instance 权重（冻结） | COCO2017 |
 
 ---
 

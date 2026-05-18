@@ -1,7 +1,7 @@
 # 子任务分配表
 
 **项目名称：** 黑白照片上色（三阶段）  
-**更新日期：** 2026/05/10（Task-02/03/04/05/06/07 已完成）
+**更新日期：** 2026/05/18（Task-02/03/04/05/06/07 已完成）
 
 ---
 
@@ -106,12 +106,14 @@
 
 ---
 
-### Task-08：[P2] 双分支网络迁移
+### Task-08：[P2] 双分支网络实现
 **文件：** `code/models/networks.py`、`code/models/inst_fusion_model.py`  
 **内容：**
-- `InstFusionGenerator`：继承/复用 `CnnColorGenerator`，加载 Phase 1 权重
-- `FusionGenerator`：3-conv 预测逐像素融合权重
-- `WeightGenerator`：实例与全图加权融合
+- `InstanceGenerator`：全图/实例共用架构，U-Net skip decoder，加载 Phase 1 权重
+- `FiLMLayer`：逐通道 scale+shift 条件调制（residual 形式）
+- `FiLMInstanceGenerator`：InstanceGenerator + conv4~7 FiLM 调制，新增 ~270K 参数
+- `WeightGenerator`：逐层 softmax 加权融合全图与实例特征
+- `FusionPipeline`：完整调度流程，逐层融合
 - 模型工厂注册 `inst_fusion`
 
 ---
@@ -119,10 +121,10 @@
 ### Task-09：[P2] 三阶段训练打通
 **文件：** `code/train.py`（`--method inst_fusion`）、`code/scripts/train_phase2.sh`  
 **内容：**
-- `--stage full`：全图上色（从 Phase 1 权重初始化）
-- `--stage instance`：实例 crop 上色（从 full 权重初始化）
-- `--stage fusion`：融合模块训练（从 full + instance 权重初始化）
-- 混合精度：`torch.cuda.amp.autocast`（RTX 4090 优化）
+- `--stage full`：ImageNet-Mini，全图 L → ab，CE+Huber 联合损失，从 Phase 1 权重初始化
+- `--stage instance`：COCO2017 GT bbox/label，实例 crop + FiLM，FiLM 层随机初始化
+- `--stage fusion`：COCO2017，全图+实例特征逐层融合，仅训练 WeightGenerator + output_conv
+- 混合精度：`torch.amp.autocast`
 - 烟雾测试：每阶段 10 iteration，权重正常保存
 
 ---
@@ -130,9 +132,10 @@
 ### Task-10：[P2] 推理闭环与评测
 **文件：** `code/test.py`（`--method inst_fusion`）  
 **内容：**
-- 有 bbox → 融合推理（instance + full）；无 bbox → 全图回退
-- bbox 检测使用 torchvision Mask R-CNN（在线推理，无需离线 npz）
-- 对比 Phase 1 结果，评测色彩合理性提升（尤其多物体场景）
+- 有 bbox → FiLM 实例分支 + 全图分支逐层融合推理；无 bbox → 全图回退
+- Mask R-CNN 在线检测（L 复制 3ch 输入）
+- 评测指标：PSNR、SSIM、LPIPS、巴氏距离，对比 Phase 1 和 Su2020 原版（无 FiLM）
+- 消融对比：有/无 FiLM，随机 label vs 正确 label，验证语义标签的贡献
 
 ---
 
