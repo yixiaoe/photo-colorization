@@ -1,6 +1,5 @@
 """Phase 1 model: full-image CNN colorization (Zhang et al. 2016)."""
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from .base_model import BaseModel
@@ -9,7 +8,8 @@ from util.util import (
     rgb2lab, lab2rgb,
     load_zhang2016_ab_bins,
     build_zhang2016_rebalance_weights,
-    encode_ab_to_zhang2016_bins,
+    encode_ab_bins_hard,
+    encode_ab_bins_soft,
     decode_zhang2016_annealed_mean,
 )
 
@@ -35,13 +35,9 @@ class CnnColorModel(BaseModel):
         self.pts_in_hull = torch.tensor(pts, dtype=torch.float32, device=self.device)
 
         if self.isTrain:
-            # rebalance weights
-            w = build_zhang2016_rebalance_weights(
-                gamma=opt.rebalance_gamma, device=self.device)
-            # cross-entropy loss with per-class weights
-            # label smoothing is handled implicitly by soft NN encoding;
-            # we use hard nearest-neighbour labels here for simplicity
-            self.criterion = nn.CrossEntropyLoss(weight=w).to(self.device)
+            # rebalance weights: (313,) lookup table, indexed per pixel by nearest bin
+            self.rebalance_w = build_zhang2016_rebalance_weights(
+                gamma=opt.rebalance_gamma, device=self.device)  # (313,)
 
             self.optimizer = torch.optim.Adam(
                 self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -50,7 +46,7 @@ class CnnColorModel(BaseModel):
 
         # AMP scaler for mixed-precision (active only when CUDA available)
         self._use_amp = (len(opt.gpu_ids) > 0 and torch.cuda.is_available())
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self._use_amp)
+        self.scaler = torch.amp.GradScaler('cuda', enabled=self._use_amp)
 
     # ── data loading ──────────────────────────────────────────────────────────
 
@@ -64,26 +60,33 @@ class CnnColorModel(BaseModel):
         self.real_L  = lab[:, [0]]                    # (N, 1, H, W)
         self.real_ab = lab[:, 1:]                      # (N, 2, H, W)
 
-        # ground-truth 313-bin class labels at 1/4 resolution (network output res)
-        H, W = self.real_L.shape[2], self.real_L.shape[3]
-        ab_down = F.interpolate(self.real_ab, size=(H // 4, W // 4), mode='bilinear',
-                                align_corners=False)
-        # (N, 1, H/4, W/4) int64
-        self.gt_ab_class = encode_ab_to_zhang2016_bins(
-            ab_down, self.pts_in_hull, ab_norm_val=self.opt.ab_norm)
+        if self.isTrain:
+            # soft probability targets + per-pixel rebalance index at 1/4 resolution
+            H, W = self.real_L.shape[2], self.real_L.shape[3]
+            ab_down = F.interpolate(self.real_ab, size=(H // 4, W // 4), mode='bilinear',
+                                    align_corners=False)
+            # (N, 313, H/4, W/4) float32 soft targets
+            self.gt_ab_soft = encode_ab_bins_soft(
+                ab_down, self.pts_in_hull, ab_norm_val=self.opt.ab_norm)
+            # (N, H/4, W/4) int64 — nearest bin per pixel, used to look up rebalance weight
+            self.gt_ab_hard = encode_ab_bins_hard(
+                ab_down, self.pts_in_hull, ab_norm_val=self.opt.ab_norm)[:, 0]
 
     # ── forward / backward ────────────────────────────────────────────────────
 
     def forward(self):
-        with torch.cuda.amp.autocast(enabled=self._use_amp):
+        with torch.amp.autocast('cuda', enabled=self._use_amp):
             logits = self.netG(self.real_L)                # (N, 313, H/4, W/4)
         # always store as float32 so loss & decode never see half-precision
         self.pred_ab_logits = logits.float()
 
     def backward(self):
-        # gt_ab_class: (N, 1, H/4, W/4) → (N, H/4, W/4) for CrossEntropyLoss
-        gt = self.gt_ab_class[:, 0]                        # (N, H/4, W/4) int64
-        self.loss_G = self.criterion(self.pred_ab_logits, gt)
+        log_probs = F.log_softmax(self.pred_ab_logits, dim=1)  # (N, 313, H/4, W/4)
+        # per-pixel cross-entropy with soft targets: sum over bin dimension → (N, H/4, W/4)
+        ce = -(self.gt_ab_soft * log_probs).sum(dim=1)
+        # per-pixel rebalance weight: look up nearest bin in the 313-entry table
+        pixel_w = self.rebalance_w[self.gt_ab_hard]            # (N, H/4, W/4)
+        self.loss_G = (ce * pixel_w).mean()
         self.scaler.scale(self.loss_G).backward()
 
     def optimize_parameters(self):

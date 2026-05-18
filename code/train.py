@@ -35,6 +35,8 @@ def main():
 
     opt.model = opt.method   # cnn_color or inst_fusion
     model = create_model(opt)
+    if opt.epoch_count > 0:
+        model.load_networks(opt.epoch_count)
     model.train()
 
     visualizer = Visualizer(opt)

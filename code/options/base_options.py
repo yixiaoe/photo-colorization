@@ -80,7 +80,7 @@ class BaseOptions():
             gid = int(s)
             if gid >= 0:
                 opt.gpu_ids.append(gid)
-        if opt.gpu_ids:
+        if opt.gpu_ids and torch.cuda.is_available():
             torch.cuda.set_device(opt.gpu_ids[0])
 
         # ensure output dirs exist

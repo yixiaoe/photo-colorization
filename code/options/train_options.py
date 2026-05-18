@@ -35,7 +35,7 @@ class TrainOptions(BaseOptions):
                             help='console log frequency (iterations)')
         parser.add_argument('--save_latest_freq', type=int, default=2000,
                             help='save latest checkpoint every N iters')
-        parser.add_argument('--save_epoch_freq', type=int, default=1,
+        parser.add_argument('--save_epoch_freq', type=int, default=20,
                             help='save checkpoint every N epochs')
         parser.add_argument('--avg_loss_alpha', type=float, default=0.986,
                             help='EMA smoothing for displayed loss')

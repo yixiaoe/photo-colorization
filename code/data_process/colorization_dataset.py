@@ -119,14 +119,27 @@ class ColorizationDataset(Data.Dataset):
     """
     Full-image dataset for Phase 1 (cnn_color) and Phase 2 stage='full'.
     Returns {'rgb_img': Tensor(3,H,W), 'gray_img': Tensor(3,H,W)}.
+
+    Training: RandomResizedCrop + RandomHorizontalFlip applied to the RGB PIL
+    image *before* deriving the gray image, so both channels see identical
+    spatial transforms (no seed juggling needed).
     """
     def __init__(self, opt, split='train'):
         self.opt = opt
         sz = opt.fineSize
-        self.tfm = T.Compose([
-            T.Resize((sz, sz), interpolation=Image.BILINEAR),
-            T.ToTensor(),
-        ])
+
+        if split == 'train':
+            # spatial augmentation on PIL before rgb/gray split
+            self.spatial_tfm = T.Compose([
+                T.RandomResizedCrop(sz, scale=(0.6, 1.0), ratio=(3/4, 4/3),
+                                    interpolation=Image.BILINEAR),
+                T.RandomHorizontalFlip(),
+            ])
+        else:
+            self.spatial_tfm = T.Resize((sz, sz), interpolation=Image.BILINEAR)
+
+        self.tensor_tfm = T.ToTensor()
+
         if opt.dataset == 'cifar10':
             self.ds = torchvision.datasets.CIFAR10(
                 root=opt.data_dir, train=(split == 'train'),
@@ -147,10 +160,12 @@ class ColorizationDataset(Data.Dataset):
         else:
             pil_img = _load_rgb(self.paths[idx])
 
+        # apply spatial transforms once on original RGB, then derive gray
+        pil_img = self.spatial_tfm(pil_img)
         rgb_img, gray_img = _to_gray_rgb(pil_img)
         return {
-            'rgb_img':  self.tfm(rgb_img),
-            'gray_img': self.tfm(gray_img),
+            'rgb_img':  self.tensor_tfm(rgb_img),
+            'gray_img': self.tensor_tfm(gray_img),
         }
 
 
@@ -163,10 +178,16 @@ class InstanceDataset(Data.Dataset):
     def __init__(self, opt, split='train'):
         self.opt = opt
         sz = opt.fineSize
-        self.tfm = T.Compose([
-            T.Resize((sz, sz), interpolation=Image.BILINEAR),
-            T.ToTensor(),
-        ])
+        if split == 'train':
+            self.spatial_tfm = T.Compose([
+                T.RandomResizedCrop(sz, scale=(0.3, 1.0), ratio=(3/4, 4/3),
+                                    interpolation=Image.BILINEAR),
+                T.RandomHorizontalFlip(),
+            ])
+        else:
+            self.spatial_tfm = T.Resize((sz, sz), interpolation=Image.BILINEAR)
+        self.tensor_tfm = T.ToTensor()
+
         if opt.dataset == 'cifar10':
             self.ds = torchvision.datasets.CIFAR10(
                 root=opt.data_dir, train=(split == 'train'),
@@ -187,18 +208,11 @@ class InstanceDataset(Data.Dataset):
         else:
             pil_img = _load_rgb(self.paths[idx])
 
-        W, H = pil_img.size
-        crop_ratio = random.uniform(0.3, 1.0)
-        cw = int(W * crop_ratio)
-        ch = int(H * crop_ratio)
-        x0 = random.randint(0, W - cw)
-        y0 = random.randint(0, H - ch)
-        pil_img = pil_img.crop((x0, y0, x0 + cw, y0 + ch))
-
+        pil_img = self.spatial_tfm(pil_img)
         rgb_img, gray_img = _to_gray_rgb(pil_img)
         return {
-            'rgb_img':  self.tfm(rgb_img),
-            'gray_img': self.tfm(gray_img),
+            'rgb_img':  self.tensor_tfm(rgb_img),
+            'gray_img': self.tensor_tfm(gray_img),
         }
 
 
@@ -307,6 +321,7 @@ class TestDataset(Data.Dataset):
         path = self.paths[idx]
         pil_img = _load_rgb(path)
         file_id = os.path.splitext(os.path.basename(path))[0]
+        orig_W, orig_H = pil_img.size   # PIL convention: (W, H)
 
         rgb_img, gray_img = _to_gray_rgb(pil_img)
         output = {
@@ -314,6 +329,7 @@ class TestDataset(Data.Dataset):
             'gray_img': self.tfm(gray_img),
             'file_id':  file_id,
             'empty_box': True,
+            'orig_size': torch.tensor([orig_H, orig_W]),  # (H, W) for interpolate
         }
 
         if self.opt.method == 'inst_fusion':

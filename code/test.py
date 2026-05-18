@@ -13,6 +13,7 @@ Usage:
 import os
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from util.check_deps import ensure_requirements
 ensure_requirements()
@@ -65,6 +66,16 @@ def main():
 
         visuals = model.get_current_visuals()
         file_id = data.get('file_id', [f'{i:05d}'])[0]
+
+        # upsample outputs to original image resolution if available
+        orig_size = data.get('orig_size')
+        if orig_size is not None:
+            orig_H, orig_W = int(orig_size[0, 0]), int(orig_size[0, 1])
+            visuals = {
+                k: F.interpolate(v, size=(orig_H, orig_W),
+                                 mode='bilinear', align_corners=False)
+                for k, v in visuals.items()
+            }
 
         for name, img_tensor in visuals.items():
             arr  = tensor2im(img_tensor)

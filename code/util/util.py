@@ -96,9 +96,9 @@ def build_zhang2016_rebalance_weights(gamma, device='cpu'):
     return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
-def encode_ab_to_zhang2016_bins(ab_norm, pts_in_hull, ab_norm_val=110.):
+def encode_ab_bins_hard(ab_norm, pts_in_hull, ab_norm_val=110.):
     """
-    Encode normalised ab tensor to nearest-neighbour bin indices.
+    Encode normalised ab tensor to nearest-neighbour bin indices (hard labels).
 
     Args:
         ab_norm:     Nx2xHxW  in [-1, 1]  (i.e. actual_ab / ab_norm_val)
@@ -115,6 +115,43 @@ def encode_ab_to_zhang2016_bins(ab_norm, pts_in_hull, ab_norm_val=110.):
     dists = torch.cdist(ab_flat.float(), pts.float())  # (N*H*W, 313)
     idx = dists.argmin(dim=1)                      # (N*H*W,)
     return idx.reshape(N, 1, H, W)
+
+
+def encode_ab_bins_soft(ab_norm, pts_in_hull, ab_norm_val=110., sigma=5.):
+    """
+    Soft-encode ab values to a probability distribution over 313 bins (Zhang et al. 2016).
+
+    For each pixel, compute L2 distances to all 313 bin centres, keep the 5
+    nearest neighbours, apply a Gaussian kernel (σ=5 in raw ab space), and
+    normalise to a valid probability distribution.
+
+    Args:
+        ab_norm:     Nx2xHxW  in [-1, 1]
+        pts_in_hull: (313, 2) Tensor, raw ab units
+        ab_norm_val: normalisation scalar (default 110.)
+        sigma:       Gaussian σ in raw ab units (default 5., per Zhang 2016)
+    Returns:
+        NxQxHxW  float32 soft probability target (sums to 1 per pixel)
+    """
+    N, _, H, W = ab_norm.shape
+    Q = pts_in_hull.shape[0]
+    ab = ab_norm * ab_norm_val                              # Nx2xHxW, raw ab
+    ab_flat = ab.permute(0, 2, 3, 1).reshape(-1, 2).float()  # (N*H*W, 2)
+    pts = pts_in_hull.to(ab_flat.device).float()            # (313, 2)
+
+    dists = torch.cdist(ab_flat, pts)                       # (N*H*W, 313)
+
+    # keep only top-5 nearest bins, zero the rest
+    topk_vals, topk_idx = dists.topk(5, dim=1, largest=False)  # (N*H*W, 5)
+    # Gaussian weights for the 5 neighbours
+    w = torch.exp(-topk_vals ** 2 / (2 * sigma ** 2))          # (N*H*W, 5)
+    w = w / w.sum(dim=1, keepdim=True)                          # normalise
+
+    # scatter back to full (N*H*W, 313) tensor
+    soft = torch.zeros(ab_flat.shape[0], Q, device=ab_flat.device, dtype=torch.float32)
+    soft.scatter_(1, topk_idx, w)
+
+    return soft.reshape(N, H, W, Q).permute(0, 3, 1, 2)        # (N, Q, H, W)
 
 
 def decode_zhang2016_annealed_mean(logits, pts_in_hull, T, ab_norm_val=110.):
