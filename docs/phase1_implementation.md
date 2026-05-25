@@ -26,6 +26,39 @@ Lab 图像 (N,3,H,W)
 
 ---
 
+## 架构演进说明
+
+> 记录初版设计与最终实现之间的差异及调整依据（原 `adjustment_plan.md`，2026/05/13）
+
+### 与参考实现的差异分析
+
+| 结构特征 | 初版实现 | 最终实现（对齐参考实现） |
+|---------|---------|----------------------|
+| 跳跃连接 | 无 | 3 层（conv1→conv10, conv2→conv9, conv3→conv8） |
+| 上采样次数 | 1 次（H/8→H/4） | 3 次（H/8→H/4→H/2→H） |
+| 输出分辨率 | H/4 + 双线性插值 | 全分辨率 |
+| 损失 | 仅分类（313-bin CE） | 分类 + 回归（CE + Huber） |
+| 参数量 | ~28M | ~32M |
+
+初版是对 Zhang 2016 论文的简化复现；参考代码（SIGGRAPHGenerator）实际上已融合了 Zhang 2016 backbone + 跳跃连接 + 渐进上采样，是更成熟的基线。
+
+### 调整原则
+
+1. **对齐参考实现**——便于 Phase 2 直接复用 WeightGenerator 融合逻辑，skip connection 的特征层名称需保持一致
+2. **3 层 add 式 skip 已足够**——不以完整 U-Net 为目标，避免过度设计
+3. **保留 313-bin CE + 退火均值解码体系**——已验证可行，不改损失函数
+4. **`get_features()` 接口向后兼容**——Phase 3 ExemplarAttention 接口不受影响
+
+### 不动点（整个 Phase 1 训练期间均未改变）
+
+- 313-bin 分类头 + 加权交叉熵
+- 退火均值解码推理流程（温度 T=0.38）
+- Phase 2 三阶段训练编排
+- Phase 3 ExemplarAttention 接口
+- 数据集管线（`colorization_dataset.py`）
+
+---
+
 ## 网络结构（`CnnColorGenerator`）
 
 | 块 | 层 | 输出通道 | 空间尺寸 | dilation |

@@ -1,7 +1,7 @@
 # Phase 2 实施方案：FiLM 条件嵌入的实例感知上色
 
 **日期：** 2026/05/18  
-**状态：** 待执行  
+**状态：** 代码实现完成（2026/05/19），待服务器训练  
 **核心思路：** 在 Su2020 双分支融合框架上，将 Mask R-CNN 的语义标签通过 FiLM 机制注入实例分支，使实例网络"知道自己在给什么物体上色"
 
 ---
@@ -166,6 +166,83 @@ wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip
 | Mask R-CNN 灰度检测性能差 | 训练用 GT，测试用检测器；对比两者结果 |
 | 融合参数太少学不动 | WeightGenerator 通道 16→32 可调 |
 | 标签粒度不足（如 "bird" 含多色） | 接受并在报告中分析 |
+
+---
+
+## 12. Stage 3 训练方案（离线检测 + 融合训练）
+
+### 背景与动机
+
+`FusionDataset` 原设计在 `__getitem__` 中实时调用 Mask R-CNN，存在两个问题：
+1. DataLoader 多 worker 下 CUDA 上下文冲突导致崩溃，只能 `--nThreads 0`，读取成为瓶颈
+2. 每张图每次训练都重复推理，浪费大量 GPU 算力
+
+改为 **先离线预计算，再训练**，彻底解耦检测与训练。
+
+---
+
+### 离线预计算（步骤一）
+
+**脚本：** `scripts/precompute_bbox.py`
+
+- 遍历 COCO train2017 所有图像，对每张图用 Mask R-CNN 推理
+- 按 `score_thresh=0.5` 过滤，保留 top-8 检测框
+- 结果写入 JSON 缓存（key = 图像文件名）：
+
+```json
+{
+  "000000000001.jpg": [[x0,y0,x1,y1,label], ...],
+  "000000000002.jpg": [],
+  ...
+}
+```
+
+- 支持断点续传（已处理的 key 直接跳过）
+- 每处理 1000 张自动 checkpoint 一次
+
+**运行命令：**
+```bash
+python scripts/precompute_bbox.py \
+    --img_dir  /root/autodl-tmp/datasets/coco/train2017 \
+    --output   /root/autodl-tmp/datasets/coco/bbox_cache_train2017.json \
+    --ckpt     checkpoints/mask_rcnn/maskrcnn_resnet50_fpn.pth \
+    --gpu 0
+```
+
+**预估时间：** COCO train2017 约 11.8 万张，RTX 4090 单张约 40ms，总计约 80 分钟
+
+---
+
+### 训练（步骤二）
+
+**`FusionDataset` 改动：**
+
+- 新增 `--bbox_cache` 参数，指向 JSON 文件路径
+- `__init__` 时一次性加载 cache 到内存（约 500MB）
+- `__getitem__` 直接查 cache，不再调用 Mask R-CNN
+- 原在线推理路径保留（`--bbox_cache` 为空时回退）
+
+**训练脚本：** `scripts/train_stage3.sh`
+
+| 参数 | 值 | 备注 |
+|------|------|------|
+| `--niter` | 60 | 对齐 plan 文档 |
+| `--niter_decay` | 60 | 线性衰减 |
+| `--batch_size` | 1 | fusion 阶段固定（每图实例数不同） |
+| `--nThreads` | 4 | 离线缓存后可多 worker |
+| `--lr` | 2e-5 | WeightGenerator 学习率 |
+| `--bbox_cache` | `bbox_cache_train2017.json` | 离线结果 |
+
+---
+
+### 文件改动清单
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/precompute_bbox.py` | 新建：离线 Mask R-CNN 预计算脚本 |
+| `data_process/colorization_dataset.py` | `FusionDataset` 支持从 cache 读 bbox |
+| `options/base_options.py` | 新增 `--bbox_cache` 参数 |
+| `scripts/train_stage3.sh` | 新建：Stage 3 专用训练脚本（60+60 epoch） |
 
 ---
 

@@ -30,6 +30,22 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--rebalance_gamma', type=float, default=REBALANCE_GAMMA,
                             help='prior-mix gamma for class rebalance weights')
 
+        # ── Phase 2 specific ─────────────────────────────────────────────
+        parser.add_argument('--num_classes', type=int, default=91,
+                            help='FiLM label vocabulary size (91 for COCO 1-90)')
+        parser.add_argument('--embed_dim', type=int, default=64,
+                            help='FiLM class embedding dimension')
+        parser.add_argument('--full_ckpt', type=str, default='',
+                            help='stage-full checkpoint (net_G.pth) to warm-start stage-instance')
+        parser.add_argument('--inst_ckpt', type=str, default='',
+                            help='stage-instance checkpoint (net_G.pth) to init fusion inst-net')
+        parser.add_argument('--lr_backbone', type=float, default=5e-5,
+                            help='backbone lr in stage-instance (FiLM layers use --lr)')
+        parser.add_argument('--ann_file', type=str, default='',
+                            help='COCO annotation JSON for stage=instance (GT bbox+label)')
+        parser.add_argument('--box_num', type=int, default=8,
+                            help='max instances per image in fusion stage')
+
         # ── logging ───────────────────────────────────────────────────────
         parser.add_argument('--print_freq', type=int, default=100,
                             help='console log frequency (iterations)')

@@ -145,7 +145,8 @@ def encode_ab_bins_soft(ab_norm, pts_in_hull, ab_norm_val=110., sigma=5.):
     topk_vals, topk_idx = dists.topk(5, dim=1, largest=False)  # (N*H*W, 5)
     # Gaussian weights for the 5 neighbours
     w = torch.exp(-topk_vals ** 2 / (2 * sigma ** 2))          # (N*H*W, 5)
-    w = w / w.sum(dim=1, keepdim=True)                          # normalise
+    w_sum = w.sum(dim=1, keepdim=True).clamp(min=1e-8)          # avoid div-by-zero
+    w = w / w_sum                                                # normalise
 
     # scatter back to full (N*H*W, 313) tensor
     soft = torch.zeros(ab_flat.shape[0], Q, device=ab_flat.device, dtype=torch.float32)

@@ -31,6 +31,8 @@ def main():
         shuffle=True,
         num_workers=opt.nThreads,
         drop_last=True,
+        pin_memory=(len(opt.gpu_ids) > 0),
+        persistent_workers=(opt.nThreads > 0),
     )
 
     opt.model = opt.method   # cnn_color or inst_fusion
@@ -53,9 +55,11 @@ def main():
 
             losses = model.get_current_losses()
 
-            # EMA smoothing
+            # EMA smoothing — skip NaN/Inf to avoid polluting the display
             alpha = opt.avg_loss_alpha
             for k, v in losses.items():
+                if v != v or v == float('inf'):   # NaN or Inf check
+                    continue
                 avg_losses[k] = alpha * avg_losses.get(k, v) + (1 - alpha) * v
 
             if total_iters % opt.print_freq == 0:

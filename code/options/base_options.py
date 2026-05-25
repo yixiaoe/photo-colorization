@@ -46,6 +46,12 @@ class BaseOptions():
         parser.add_argument('--results_dir', type=str, default='./results')
         parser.add_argument('--which_epoch', type=str, default='latest')
 
+        # ── bbox cache (stage=fusion offline precompute) ──────────────────
+        parser.add_argument('--bbox_cache', type=str, default='',
+                            help='precomputed bbox JSON from scripts/precompute_bbox.py '
+                                 '(e.g. datasets/bbox_cache_train2017.json); '
+                                 'leave empty to fall back to online Mask R-CNN (nThreads=0 required)')
+
         # ── misc ──────────────────────────────────────────────────────────
         parser.add_argument('--gpu_ids', type=str, default='0',
                             help='comma-separated GPU ids; -1 for CPU')
