@@ -1,0 +1,105 @@
+"""
+Phase 3 — 文本引导上色训练入口。
+
+本脚本是 Phase 3 的独立训练入口，与 train.py（Phase 1/2）完全解耦。
+训练流程：
+  1. 加载 CocoCaptionDataset（COCO 图像 + captions）
+  2. 创建 TextColorModel（含冻结 CLIP + 冻结 InstanceGenerator + 可训练 xattn）
+  3. 每个 batch：图像转 Lab，caption 经 CLIP 编码，前向 → 损失 → 反向更新 xattn
+  4. 定期保存 checkpoint 和 TensorBoard 可视化
+
+训练策略：
+  - 仅训练 Cross-Attention 参数（~609K），其余全部冻结
+  - 使用 CE(rebalanced) + 10×Huber 损失（与 Phase 2 一致）
+  - 支持 AMP 混合精度加速
+
+Usage:
+  python train_phase3.py \\
+      --data_dir /path/to/coco/train2017 \\
+      --caption_file /path/to/captions_train2017.json \\
+      --full_ckpt checkpoints/inst_full/net_G.pth \\
+      --fineSize 256 --batch_size 16 --nThreads 4 \\
+      --lr 1e-4 --niter 30 --niter_decay 30 \\
+      --name text_color --gpu_ids 0
+"""
+import time
+import torch
+
+from util.check_deps import ensure_requirements
+ensure_requirements()
+
+from options.phase3_options import Phase3TrainOptions
+from data_process.text_color_dataset import CocoCaptionDataset
+from models.text_color_model import TextColorModel
+from util.visualizer import Visualizer
+
+
+def main():
+    opt = Phase3TrainOptions().parse()
+
+    dataset = CocoCaptionDataset(
+        img_dir=opt.data_dir,
+        caption_file=opt.caption_file,
+        fine_size=opt.fineSize,
+        split='train',
+        max_dataset_size=opt.max_dataset_size,
+    )
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=opt.batch_size,
+        shuffle=True,
+        num_workers=opt.nThreads,
+        drop_last=True,
+        pin_memory=(len(opt.gpu_ids) > 0),
+        persistent_workers=(opt.nThreads > 0),
+    )
+
+    model = TextColorModel()
+    model.initialize(opt)
+    if opt.epoch_count > 0:
+        model.load_networks(opt.epoch_count)
+    model.train()
+
+    visualizer = Visualizer(opt)
+    total_iters = 0
+    avg_losses = {}
+
+    for epoch in range(opt.epoch_count, opt.niter + opt.niter_decay):
+        epoch_start = time.time()
+
+        for i, data in enumerate(loader):
+            total_iters += 1
+            model.set_input(data)
+            model.optimize_parameters()
+
+            losses = model.get_current_losses()
+            alpha = opt.avg_loss_alpha
+            for k, v in losses.items():
+                if v != v or v == float('inf'):
+                    continue
+                avg_losses[k] = alpha * avg_losses.get(k, v) + (1-alpha) * v
+
+            if total_iters % opt.print_freq == 0:
+                loss_str = '  '.join(
+                    f'{k}: {v:.4f}' for k, v in avg_losses.items())
+                print(f'[epoch {epoch+1}  iter {total_iters}]  {loss_str}')
+                visualizer.plot_losses(avg_losses, total_iters)
+
+            if total_iters % opt.save_latest_freq == 0:
+                model.save_networks('latest')
+                visuals = model.get_current_visuals()
+                visualizer.plot_images(visuals, total_iters)
+
+        if (epoch + 1) % opt.save_epoch_freq == 0:
+            model.save_networks(epoch + 1)
+
+        model.update_learning_rate()
+        elapsed = time.time() - epoch_start
+        print(f'Epoch {epoch+1} done in {elapsed:.0f}s')
+
+    visualizer.close()
+    print('Training complete.')
+
+
+if __name__ == '__main__':
+    main()
