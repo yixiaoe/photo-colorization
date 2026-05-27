@@ -6,9 +6,9 @@
 set -e
 cd "$(dirname "$0")/.."
 
-COCO_TRAIN=/root/autodl-pub/COCO2017/train2017
-COCO_VAL=/root/autodl-pub/COCO2017/val2017
-COCO_ANN=/root/autodl-pub/COCO2017/annotations
+COCO_TRAIN=/root/autodl-tmp/COCO2017/train2017
+COCO_VAL=/root/autodl-tmp/COCO2017/val2017
+COCO_ANN=/root/autodl-tmp/COCO2017/annotations
 
 python train_phase3.py \
     --data_dir "$COCO_TRAIN" \

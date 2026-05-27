@@ -6,8 +6,8 @@
 set -e
 cd "$(dirname "$0")/.."
 
-COCO_TRAIN=/root/autodl-pub/COCO2017/train2017
-COCO_VAL=/root/autodl-pub/COCO2017/val2017
+COCO_TRAIN=/root/autodl-tmp/COCO2017/train2017
+COCO_VAL=/root/autodl-tmp/COCO2017/val2017
 CKPT_NAME=inst_full
 
 python train.py \
