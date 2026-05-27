@@ -19,6 +19,8 @@ from options.train_options import TrainOptions
 from data_process.colorization_dataset import create_dataset
 from models import create_model
 from util.visualizer import Visualizer
+from util.util import lab2rgb
+from util.metrics import compute_psnr
 
 
 def main():
@@ -44,6 +46,19 @@ def main():
     visualizer = Visualizer(opt)
     total_iters = 0
     avg_losses  = {}           # EMA-smoothed losses for console display
+    best_psnr   = -1.0
+
+    # build val loader once if val_data_dir is provided
+    val_loader = None
+    if getattr(opt, 'val_data_dir', '') and opt.val_data_dir:
+        import copy
+        val_opt = copy.copy(opt)
+        val_opt.data_dir = opt.val_data_dir
+        val_dataset = create_dataset(val_opt, stage=opt.stage, split='val')
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=opt.batch_size, shuffle=False,
+            num_workers=opt.nThreads, drop_last=False,
+        )
 
     for epoch in range(opt.epoch_count, opt.niter + opt.niter_decay):
         epoch_start = time.time()
@@ -75,6 +90,30 @@ def main():
 
         if (epoch + 1) % opt.save_epoch_freq == 0:
             model.save_networks(epoch + 1)
+
+        # ── validation ────────────────────────────────────────────────────
+        if val_loader is not None and (epoch + 1) % opt.val_freq == 0:
+            model.eval()
+            psnr_scores = []
+            with torch.no_grad():
+                for val_data in val_loader:
+                    model.set_input(val_data)
+                    model.forward()
+                    visuals = model.get_current_visuals()
+                    if 'fake_rgb' in visuals and 'real_rgb' in visuals:
+                        psnr_scores.append(
+                            compute_psnr(visuals['fake_rgb'].clamp(0, 1),
+                                         visuals['real_rgb'].clamp(0, 1))
+                        )
+            model.train()
+            if psnr_scores:
+                val_psnr = sum(psnr_scores) / len(psnr_scores)
+                print(f'[Val] epoch {epoch+1}  PSNR = {val_psnr:.2f} dB')
+                visualizer.plot_losses({'val_psnr': val_psnr}, total_iters)
+                if val_psnr > best_psnr:
+                    best_psnr = val_psnr
+                    model.save_networks('best')
+                    print(f'  → new best checkpoint saved (PSNR {best_psnr:.2f} dB)')
 
         model.update_learning_rate()
         elapsed = time.time() - epoch_start

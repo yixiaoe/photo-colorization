@@ -26,6 +26,7 @@ ensure_requirements()
 from options.phase3_options import Phase3TestOptions
 from models.text_color_model import TextColorModel
 from util.util import save_image, tensor2im, rgb2lab, lab2rgb
+from util.metrics import compute_psnr, compute_ssim
 from PIL import Image
 import torchvision.transforms as T
 
@@ -58,6 +59,8 @@ def main():
     ])
 
     prompt = opt.prompt if opt.prompt else "a colorful scene"
+    psnr_scores = []
+    ssim_scores = []
 
     for i, path in enumerate(paths):
         if i >= opt.how_many:
@@ -80,9 +83,18 @@ def main():
                 opt.results_img_dir, f'{file_id}_{name}.png')
             save_image(arr, out_path)
 
+        if 'fake_rgb' in visuals and 'real_rgb' in visuals:
+            fake_01 = visuals['fake_rgb'].clamp(0, 1)
+            real_01 = visuals['real_rgb'].clamp(0, 1)
+            psnr_scores.append(compute_psnr(fake_01, real_01))
+            ssim_scores.append(compute_ssim(fake_01, real_01))
+
         if (i + 1) % 10 == 0:
             print(f'Processed {i+1} / {min(len(paths), opt.how_many)}')
 
+    if psnr_scores:
+        print(f'PSNR  mean = {sum(psnr_scores)/len(psnr_scores):.2f} dB')
+        print(f'SSIM  mean = {sum(ssim_scores)/len(ssim_scores):.4f}')
     print(f'Done. Results saved to {opt.results_img_dir}')
 
 

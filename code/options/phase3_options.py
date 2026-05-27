@@ -52,6 +52,14 @@ class Phase3TrainOptions(BaseOptions):
         parser.add_argument('--save_epoch_freq', type=int, default=10)
         parser.add_argument('--avg_loss_alpha', type=float, default=0.986)
 
+        # validation
+        parser.add_argument('--val_data_dir', type=str, default='',
+                            help='COCO val2017 image folder; skip val if empty')
+        parser.add_argument('--val_caption_file', type=str, default='',
+                            help='captions_val2017.json; required if val_data_dir set')
+        parser.add_argument('--val_freq', type=int, default=5,
+                            help='run validation every N epochs')
+
         return parser
 
 

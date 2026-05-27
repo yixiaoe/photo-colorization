@@ -46,6 +46,12 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--box_num', type=int, default=8,
                             help='max instances per image in fusion stage')
 
+        # ── validation ────────────────────────────────────────────────────
+        parser.add_argument('--val_data_dir', type=str, default='',
+                            help='validation image folder; skip val if empty')
+        parser.add_argument('--val_freq', type=int, default=5,
+                            help='run validation every N epochs')
+
         # ── logging ───────────────────────────────────────────────────────
         parser.add_argument('--print_freq', type=int, default=100,
                             help='console log frequency (iterations)')

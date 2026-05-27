@@ -22,6 +22,7 @@ from options.train_options import TestOptions
 from data_process.colorization_dataset import create_dataset
 from models import create_model
 from util.util import save_image, tensor2im, lab2rgb, rgb2lab
+from util.metrics import compute_psnr, compute_ssim
 
 
 def _ab_histogram(ab_tensor, bins=32, ab_range=(-1, 1)):
@@ -54,7 +55,9 @@ def main():
 
     os.makedirs(opt.results_img_dir, exist_ok=True)
 
-    bd_scores = []
+    bd_scores   = []
+    psnr_scores = []
+    ssim_scores = []
 
     for i, data in enumerate(loader):
         if i >= opt.how_many:
@@ -91,6 +94,11 @@ def main():
             bd = bhattacharyya_distance(h_fake, h_real)
             bd_scores.append(bd)
 
+            fake_01 = visuals['fake_rgb'].clamp(0, 1)
+            real_01 = visuals['real_rgb'].clamp(0, 1)
+            psnr_scores.append(compute_psnr(fake_01, real_01))
+            ssim_scores.append(compute_ssim(fake_01, real_01))
+
         if (i + 1) % 10 == 0:
             n = min(len(dataset), opt.how_many)
             print(f'Processed {i + 1} / {n}')
@@ -99,6 +107,9 @@ def main():
         mean_bd = float(np.mean(bd_scores))
         print(f'\nBhattacharyya distance (ab histogram)  mean = {mean_bd:.4f}  '
               f'(lower → more similar colour distribution)')
+    if psnr_scores:
+        print(f'PSNR  mean = {sum(psnr_scores)/len(psnr_scores):.2f} dB')
+        print(f'SSIM  mean = {sum(ssim_scores)/len(ssim_scores):.4f}')
 
     print('Inference complete. Results saved to', opt.results_img_dir)
 
