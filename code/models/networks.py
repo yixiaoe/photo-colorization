@@ -540,7 +540,8 @@ class FusionPipeline(nn.Module):
         self.wg_conv6_3  = WeightGenerator(512)
         self.wg_conv7_3  = WeightGenerator(512)
 
-        # ── Trainable output head ─────────────────────────────────────────
+        # ── Trainable output heads ────────────────────────────────────────
+        self.model_class = nn.Conv2d(256, 313, kernel_size=1, bias=B)  # from conv8_3, H/4
         self.output_conv = nn.Sequential(
             nn.Conv2d(128, 2, kernel_size=1, bias=B),
             nn.Tanh(),
@@ -549,11 +550,11 @@ class FusionPipeline(nn.Module):
     # ── weight helpers ────────────────────────────────────────────────────
 
     def freeze_backbone(self):
-        """Freeze all backbone parameters (keep WeightGenerators + output_conv trainable)."""
+        """Freeze all backbone parameters (keep WeightGenerators + output heads trainable)."""
         trainable = {'wg_conv1_2', 'wg_conv2_2', 'wg_conv3_3',
                      'wg_conv4_3', 'wg_conv5_3', 'wg_conv6_3', 'wg_conv7_3',
                      'wg_conv8_up', 'wg_conv8_3', 'wg_conv9_up', 'wg_conv9_3',
-                     'wg_conv10_up', 'wg_conv10_2', 'output_conv'}
+                     'wg_conv10_up', 'wg_conv10_2', 'model_class', 'output_conv'}
         for name, param in self.named_parameters():
             param.requires_grad_(name.split('.')[0] in trainable)
 
@@ -631,7 +632,9 @@ class FusionPipeline(nn.Module):
         conv10_2 = self.model10(conv10_up)
         conv10_2 = _fuse(self.wg_conv10_2, conv10_2, 'conv10_2', bi0 if has_inst else None)
 
-        return self.output_conv(conv10_2)   # (1, 2, H, W)
+        out_class = self.model_class(conv8_3)       # (1, 313, H/4, W/4)
+        out_reg   = self.output_conv(conv10_2)      # (1, 2, H, W)
+        return out_class, out_reg
 
 
 # ── Phase 3 placeholders ────────────────────────────────────────────

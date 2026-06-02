@@ -18,6 +18,7 @@ from util.util import (
     build_zhang2016_rebalance_weights,
     encode_ab_bins_soft,
     encode_ab_bins_hard,
+    decode_zhang2016_annealed_mean,
 )
 
 
@@ -26,38 +27,23 @@ from util.util import (
 def _ce_huber_loss(logits_class, pred_ab, gt_ab_soft, gt_ab_hard, rebalance_w,
                    ab_norm, pts_in_hull):
     """
-    Combined CE (rebalanced) + 10× Huber loss used in Stage 1 & 2.
-
-    logits_class: (N, 313, H/4, W/4)
-    pred_ab:      (N, 2,   H,   W)   – Tanh output [-1,1]
-    gt_ab_soft:   (N, 313, H/4, W/4) – soft probability targets
-    gt_ab_hard:   (N,      H/4, W/4) – nearest-bin indices
-    rebalance_w:  (313,)             – per-bin weights
-    ab_norm:      scalar normalisation constant
-    pts_in_hull:  (313, 2) Tensor
+    Rebalanced CE + 3× Huber loss for Stage full & instance.
     """
-    # CE
     logits_class = logits_class.float().clamp(-100., 100.)
     log_p = F.log_softmax(logits_class, dim=1).clamp(min=-100.)
-    ce = -(gt_ab_soft * log_p).sum(dim=1)                 # (N, H/4, W/4)
-    pw = rebalance_w[gt_ab_hard]                           # (N, H/4, W/4)
+    ce = -(gt_ab_soft * log_p).sum(dim=1)
+    pw = rebalance_w[gt_ab_hard]
     loss_ce = (ce * pw).mean()
 
-    # Huber on full-resolution ab
     H, W = pred_ab.shape[2:]
     gt_ab_full = F.interpolate(
-        # gt_ab_hard → (N,1,H/4,W/4) → upsample, but we need ab from gt soft
-        # We reconstruct gt_ab from the soft targets' argmax or use bilinear upsample
-        # of the raw ab: pass it via the caller. Here we accept gt_ab_soft at H/4
-        # and the caller provides pred_ab at H → we downscale pred_ab to H/4 for Huber.
         pred_ab, size=(H // 4, W // 4), mode='bilinear', align_corners=False)
 
-    # decode gt_ab at H/4 from hard indices for Huber
-    pts = pts_in_hull.to(pred_ab.device)                   # (313, 2)
-    hard_flat = gt_ab_hard.reshape(-1)                     # (N*H4*W4,)
+    pts = pts_in_hull.to(pred_ab.device)
+    hard_flat = gt_ab_hard.reshape(-1)
     gt_ab_pts = pts[hard_flat].reshape(
         gt_ab_hard.shape[0], gt_ab_hard.shape[1], gt_ab_hard.shape[2], 2
-    ).permute(0, 3, 1, 2) / ab_norm                        # (N,2,H/4,W/4)
+    ).permute(0, 3, 1, 2) / ab_norm
 
     diff = (gt_ab_full - gt_ab_pts).abs()
     delta = 0.01
@@ -65,7 +51,7 @@ def _ce_huber_loss(logits_class, pred_ab, gt_ab_soft, gt_ab_hard, rebalance_w,
                              0.5 * diff ** 2 / delta,
                              diff - 0.5 * delta).mean()
 
-    return loss_ce + 10.0 * loss_huber
+    return loss_ce + 3.0 * loss_huber
 
 
 class InstFusionModel(BaseModel):
@@ -115,7 +101,6 @@ class InstFusionModel(BaseModel):
 
     def _init_full(self, opt):
         self.netG = InstanceGenerator().to(self.device)
-        self._load_phase1_weights(opt)
 
         if self.isTrain:
             self.rebalance_w = build_zhang2016_rebalance_weights(
@@ -178,21 +163,12 @@ class InstFusionModel(BaseModel):
         self.netInst.eval()
 
         if self.isTrain:
+            self.rebalance_w = build_zhang2016_rebalance_weights(
+                gamma=getattr(opt, 'rebalance_gamma', 0.5), device=self.device)
             self.optimizer = torch.optim.Adam(
                 self.netG.get_trainable_params(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers = [self.optimizer]
             self.setup_schedulers()
-
-    def _load_phase1_weights(self, opt):
-        """Try to load Phase 1 weights into InstanceGenerator (partial match)."""
-        p1_path = os.path.join(opt.checkpoints_dir, 'cnn_color', 'latest_net_G.pth')
-        if os.path.isfile(p1_path):
-            state = torch.load(p1_path, map_location=self.device)
-            missing, unexpected = self.netG.load_state_dict(state, strict=False)
-            print(f'[full] Loaded Phase-1 weights: '
-                  f'{len(missing)} missing, {len(unexpected)} unexpected keys')
-        else:
-            print(f'[full] Phase-1 checkpoint not found at {p1_path}; random init')
 
     # ── input loading ─────────────────────────────────────────────────────────
 
@@ -202,7 +178,10 @@ class InstFusionModel(BaseModel):
         elif self.stage == 'instance':
             self._set_input_instance(data)
         elif self.stage == 'fusion':
-            self._set_input_fusion(data)
+            if not self.isTrain:
+                self._set_input_fusion_test(data)
+            else:
+                self._set_input_fusion(data)
 
     def _set_input_full(self, data):
         rgb = data['rgb_img'].to(self.device)
@@ -249,6 +228,15 @@ class InstFusionModel(BaseModel):
 
         self.empty_box = bool(data.get('empty_box', True))
 
+        if self.isTrain:
+            H, W = self.real_L_full.shape[2], self.real_L_full.shape[3]
+            ab_down = F.interpolate(self.real_ab_full, size=(H // 4, W // 4),
+                                    mode='bilinear', align_corners=False)
+            self.gt_ab_soft_full = encode_ab_bins_soft(
+                ab_down, self.pts_in_hull, ab_norm_val=self.opt.ab_norm)
+            self.gt_ab_hard_full = encode_ab_bins_hard(
+                ab_down, self.pts_in_hull, ab_norm_val=self.opt.ab_norm)[:, 0]
+
         if not self.empty_box:
             cropped_rgb = data['cropped_rgb'].to(self.device)  # (1,N,3,H,W) or (N,3,H,W)
             if cropped_rgb.dim() == 5:
@@ -258,6 +246,30 @@ class InstFusionModel(BaseModel):
             self.inst_L = lab_inst[:, [0]]                     # (N,1,H,W)
 
             # DataLoader wraps each tensor in a batch dim → squeeze it off
+            self.class_labels = data['class_labels'].to(self.device).squeeze(0)  # (N,)
+            self.box_info     = data['box_info'].to(self.device).squeeze(0)      # (N,6)
+            self.box_info_2x  = data['box_info_2x'].to(self.device).squeeze(0)
+            self.box_info_4x  = data['box_info_4x'].to(self.device).squeeze(0)
+            self.box_info_8x  = data['box_info_8x'].to(self.device).squeeze(0)
+
+    def _set_input_fusion_test(self, data):
+        """
+        Input from TestDataset for fusion inference.
+        Uses 'rgb_img' as full image; bbox from online Mask R-CNN (already in data).
+        """
+        rgb = data['rgb_img'].to(self.device)          # (1,3,H,W)
+        lab = rgb2lab(rgb, self.opt)
+        self.real_L_full  = lab[:, [0]]                # (1,1,H,W)
+        self.real_ab_full = lab[:, 1:]                 # (1,2,H,W)
+
+        self.empty_box = bool(data.get('empty_box', True))
+
+        if not self.empty_box:
+            cropped = data['cropped_img'].to(self.device)
+            if cropped.dim() == 5:
+                cropped = cropped.squeeze(0)               # (1,N,3,H,W) → (N,3,H,W)
+            lab_inst = rgb2lab(cropped, self.opt)
+            self.inst_L = lab_inst[:, [0]]                 # (N,1,H,W)
             self.class_labels = data['class_labels'].to(self.device).squeeze(0)  # (N,)
             self.box_info     = data['box_info'].to(self.device).squeeze(0)      # (N,6)
             self.box_info_2x  = data['box_info_2x'].to(self.device).squeeze(0)
@@ -312,8 +324,9 @@ class InstFusionModel(BaseModel):
                 inst_feats = []
                 box_info_list = []
 
-            fused_ab = self.netG(self.real_L_full, inst_feats, box_info_list)
+            fused_class, fused_ab = self.netG(self.real_L_full, inst_feats, box_info_list)
 
+        self.pred_class_fused = fused_class.float()
         self.pred_ab_fused = fused_ab.float()
 
     # ── backward ──────────────────────────────────────────────────────────────
@@ -324,23 +337,56 @@ class InstFusionModel(BaseModel):
                 self.pred_class, self.pred_ab,
                 self.gt_ab_soft, self.gt_ab_hard,
                 self.rebalance_w, self.opt.ab_norm, self.pts_in_hull)
-        else:  # fusion
+        else:  # fusion — CE + 3× Huber
+            logits = self.pred_class_fused.float().clamp(-100., 100.)
+            log_p = F.log_softmax(logits, dim=1).clamp(min=-100.)
+            ce = -(self.gt_ab_soft_full * log_p).sum(dim=1)
+            pw = self.rebalance_w[self.gt_ab_hard_full]
+            loss_ce = (ce * pw).mean()
+
             H, W = self.real_ab_full.shape[2:]
             pred_down = F.interpolate(self.pred_ab_fused, size=(H // 4, W // 4),
                                       mode='bilinear', align_corners=False)
-            gt_down   = F.interpolate(self.real_ab_full,  size=(H // 4, W // 4),
-                                      mode='bilinear', align_corners=False)
+            gt_down = F.interpolate(self.real_ab_full, size=(H // 4, W // 4),
+                                    mode='bilinear', align_corners=False)
             diff = (pred_down - gt_down).abs()
             delta = 0.01
-            self.loss_G = torch.where(diff < delta,
-                                      0.5 * diff ** 2 / delta,
-                                      diff - 0.5 * delta).mean()
+            loss_huber = torch.where(diff < delta,
+                                     0.5 * diff ** 2 / delta,
+                                     diff - 0.5 * delta).mean()
+
+            self.loss_G = loss_ce + 3.0 * loss_huber
+
+    def _snapshot_bn_stats(self):
+        """Save BN running stats so we can roll back if forward produces NaN."""
+        snap = {}
+        for name, m in self.netG.named_modules():
+            if isinstance(m, torch.nn.BatchNorm2d):
+                snap[name] = (m.running_mean.clone(), m.running_var.clone())
+        if hasattr(self, 'netInst'):
+            for name, m in self.netInst.named_modules():
+                if isinstance(m, torch.nn.BatchNorm2d):
+                    snap['inst.' + name] = (m.running_mean.clone(), m.running_var.clone())
+        return snap
+
+    def _restore_bn_stats(self, snap):
+        for name, m in self.netG.named_modules():
+            if isinstance(m, torch.nn.BatchNorm2d) and name in snap:
+                m.running_mean.copy_(snap[name][0])
+                m.running_var.copy_(snap[name][1])
+        if hasattr(self, 'netInst'):
+            for name, m in self.netInst.named_modules():
+                key = 'inst.' + name
+                if isinstance(m, torch.nn.BatchNorm2d) and key in snap:
+                    m.running_mean.copy_(snap[key][0])
+                    m.running_var.copy_(snap[key][1])
 
     def optimize_parameters(self):
+        bn_snap = self._snapshot_bn_stats()
         self.forward()
-        # compute loss without backward first, skip bad batch entirely
         self.backward()
         if torch.isnan(self.loss_G) or torch.isinf(self.loss_G):
+            self._restore_bn_stats(bn_snap)
             self.optimizer.zero_grad()
             return
         self.optimizer.zero_grad()
@@ -360,11 +406,18 @@ class InstFusionModel(BaseModel):
             if self.stage == 'fusion':
                 real_L  = self.real_L_full
                 real_ab = self.real_ab_full
-                pred_ab = self.pred_ab_fused
+                pred_ab = decode_zhang2016_annealed_mean(
+                    self.pred_class_fused, self.pts_in_hull,
+                    T=getattr(self.opt, 'T', 0.38),
+                    ab_norm_val=self.opt.ab_norm)
             else:
                 real_L  = self.real_L
                 real_ab = self.real_ab
-                pred_ab = self.pred_ab
+                # use classification head with annealed-mean decoding for vivid colors
+                pred_ab = decode_zhang2016_annealed_mean(
+                    self.pred_class, self.pts_in_hull,
+                    T=getattr(self.opt, 'T', 0.38),
+                    ab_norm_val=self.opt.ab_norm)
 
             H, W = real_L.shape[2], real_L.shape[3]
             pred_ab_up = F.interpolate(pred_ab, size=(H, W),
@@ -388,17 +441,30 @@ class InstFusionModel(BaseModel):
     # ── checkpoint helpers ────────────────────────────────────────────────────
 
     def save_networks(self, epoch):
-        # netG is always saved
         super().save_networks(epoch)
-        # also export a bare state_dict file for easy loading by later stages
         if self.stage in ('full', 'instance'):
             bare_path = os.path.join(self.save_dir, 'net_G.pth')
             torch.save(self.netG.state_dict(), bare_path)
 
+    def load_networks(self, epoch):
+        """Load netG; for fusion stage also reload netInst from inst_ckpt."""
+        super().load_networks(epoch)
+        if self.stage == 'fusion' and hasattr(self, 'netInst'):
+            inst_ckpt = getattr(self.opt, 'inst_ckpt', '')
+            if inst_ckpt and os.path.isfile(inst_ckpt):
+                state = torch.load(inst_ckpt, map_location=self.device)
+                self.netInst.load_state_dict(state)
+                print(f'[fusion inference] reloaded netInst from {inst_ckpt}')
+
     def train(self):
         self.netG.train()
         if self.stage == 'fusion':
-            self.netInst.eval()  # keep frozen
+            self.netInst.eval()
+            # frozen backbone BN must stay in eval mode to avoid corrupting running stats
+            for m in self.netG.modules():
+                if isinstance(m, torch.nn.BatchNorm2d) and not any(
+                        p.requires_grad for p in m.parameters()):
+                    m.eval()
 
     def eval(self):
         self.netG.eval()

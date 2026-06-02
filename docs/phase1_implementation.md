@@ -32,22 +32,22 @@ Lab 图像 (N,3,H,W)
 
 ### 与参考实现的差异分析
 
-| 结构特征 | 初版实现 | 最终实现（对齐参考实现） |
-|---------|---------|----------------------|
-| 跳跃连接 | 无 | 3 层（conv1→conv10, conv2→conv9, conv3→conv8） |
-| 上采样次数 | 1 次（H/8→H/4） | 3 次（H/8→H/4→H/2→H） |
-| 输出分辨率 | H/4 + 双线性插值 | 全分辨率 |
-| 损失 | 仅分类（313-bin CE） | 分类 + 回归（CE + Huber） |
-| 参数量 | ~28M | ~32M |
+| 结构特征 | 初版实现 | 最终实现（`CnnColorGenerator`） |
+|---------|---------|-------------------------------|
+| 跳跃连接 | 无 | **无**（Phase 1 保持纯顺序结构） |
+| 上采样次数 | 1 次（H/8→H/4） | 1 次（H/8→H/4），输出 H/4 后双线性插值 |
+| 输出分辨率 | H/4 + 双线性插值 | H/4 + 双线性插值 |
+| 损失 | 仅分类（313-bin CE） | 软标签 KL 散度 + 逐像素重平衡权重 |
+| 参数量 | ~28M | ~33M |
 
-初版是对 Zhang 2016 论文的简化复现；参考代码（SIGGRAPHGenerator）实际上已融合了 Zhang 2016 backbone + 跳跃连接 + 渐进上采样，是更成熟的基线。
+> **注意**：skip connection（3 层：conv1→conv10, conv2→conv9, conv3→conv8）属于 **Phase 2** 的 `InstanceGenerator` 设计，Phase 1 的 `CnnColorGenerator` **不含** skip connection。两者架构分离，Phase 2 的 skip 设计是为了配合 WeightGenerator 逐层融合而引入的。
 
 ### 调整原则
 
-1. **对齐参考实现**——便于 Phase 2 直接复用 WeightGenerator 融合逻辑，skip connection 的特征层名称需保持一致
-2. **3 层 add 式 skip 已足够**——不以完整 U-Net 为目标，避免过度设计
-3. **保留 313-bin CE + 退火均值解码体系**——已验证可行，不改损失函数
-4. **`get_features()` 接口向后兼容**——Phase 3 ExemplarAttention 接口不受影响
+1. **Phase 1 不引入 skip**——`CnnColorGenerator` 保持 Zhang 2016 原版顺序结构，简洁可复现
+2. **保留 313-bin CE + 退火均值解码体系**——已验证可行，不改损失函数
+3. **`get_features()` 接口向后兼容**——Phase 3 ExemplarAttention 接口不受影响
+4. **skip connection 留给 Phase 2**——`InstanceGenerator` 引入 3 层 skip，配合 WeightGenerator 特征层名称对齐
 
 ### 不动点（整个 Phase 1 训练期间均未改变）
 

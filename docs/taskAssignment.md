@@ -1,7 +1,7 @@
 # 子任务分配表
 
 **项目名称：** 黑白照片上色（三阶段）  
-**更新日期：** 2026/05/18（Task-02/03/04/05/06/07 已完成）
+**更新日期：** 2026/06/02（Phase 2 训练完成）
 
 ---
 
@@ -16,9 +16,9 @@
 | Task-05 | [P1] CnnColorGenerator 网络实现 | Phase 1 | Yi_CC | ☑ 已完成 | Task-03 |
 | Task-06 | [P1] 训练打通（全图上色） | Phase 1 | Yi_CC | ☑ 已完成 | Task-04, Task-05 |
 | Task-07 | [P1] 推理闭环与评测 | Phase 1 | Yi_CC | ☑ 已完成 | Task-06 |
-| Task-08 | [P2] 双分支网络迁移 | Phase 2 | | ☐ 未开始 | Task-07 |
-| Task-09 | [P2] 三阶段训练打通 | Phase 2 | | ☐ 未开始 | Task-04, Task-08 |
-| Task-10 | [P2] 推理闭环与评测 | Phase 2 | | ☐ 未开始 | Task-09 |
+| Task-08 | [P2] 双分支网络实现 | Phase 2 | | ☑ 已完成 | Task-07 |
+| Task-09 | [P2] 三阶段训练打通 | Phase 2 | | ☑ 已完成 | Task-04, Task-08 |
+| Task-10 | [P2] 推理闭环与评测 | Phase 2 | | ☑ 已完成 | Task-09 |
 | Task-11 | [P3] ExemplarAttention 模块 | Phase 3 | | ☐ 未开始 | Task-07 |
 | Task-12 | [P3] Exemplar 推理验证 | Phase 3 | | ☐ 未开始 | Task-11 |
 
@@ -106,10 +106,10 @@
 
 ---
 
-### Task-08：[P2] 双分支网络实现
+### Task-08：[P2] 双分支网络实现 ☑
 **文件：** `code/models/networks.py`、`code/models/inst_fusion_model.py`  
 **内容：**
-- `InstanceGenerator`：全图/实例共用架构，U-Net skip decoder，加载 Phase 1 权重
+- `InstanceGenerator`：全图/实例共用架构，U-Net skip decoder，随机初始化（不依赖 Phase 1）
 - `FiLMLayer`：逐通道 scale+shift 条件调制（residual 形式）
 - `FiLMInstanceGenerator`：InstanceGenerator + conv4~7 FiLM 调制，新增 ~270K 参数
 - `WeightGenerator`：逐层 softmax 加权融合全图与实例特征
@@ -118,24 +118,28 @@
 
 ---
 
-### Task-09：[P2] 三阶段训练打通
+### Task-09：[P2] 三阶段训练打通 ☑
 **文件：** `code/train.py`（`--method inst_fusion`）、`code/scripts/train_phase2.sh`  
 **内容：**
-- `--stage full`：ImageNet-Mini，全图 L → ab，CE+Huber 联合损失，从 Phase 1 权重初始化
+- `--stage full`：COCO2017 全图，CE+Huber(×3) 联合损失，随机初始化
 - `--stage instance`：COCO2017 GT bbox/label，实例 crop + FiLM，FiLM 层随机初始化
-- `--stage fusion`：COCO2017，全图+实例特征逐层融合，仅训练 WeightGenerator + output_conv
+- `--stage fusion`：COCO2017，全图+实例特征逐层融合，FusionPipeline 新增 **分类头**
 - 混合精度：`torch.amp.autocast`
-- 烟雾测试：每阶段 10 iteration，权重正常保存
+- BN 保护：forward NaN 时回滚 running stats；fusion 阶段冻结骨干 BN 为 eval 模式
+- 已支持 `--stage instance` 的逐实例推理测试
+- 训练设备：RTX 5090，总耗时约 5 天
 
 ---
 
-### Task-10：[P2] 推理闭环与评测
+### Task-10：[P2] 推理闭环与评测 ☑
 **文件：** `code/test.py`（`--method inst_fusion`）  
 **内容：**
+- 支持三路推理：`--stage full`（全图骨干）、`--stage instance`（逐实例上色）、`--stage fusion`（融合上色）
 - 有 bbox → FiLM 实例分支 + 全图分支逐层融合推理；无 bbox → 全图回退
 - Mask R-CNN 在线检测（L 复制 3ch 输入）
-- 评测指标：PSNR、SSIM、LPIPS、巴氏距离，对比 Phase 1 和 Su2020 原版（无 FiLM）
-- 消融对比：有/无 FiLM，随机 label vs 正确 label，验证语义标签的贡献
+- 评测指标：巴氏距离（ab 直方图相似度）
+- Fusion 使用分类头 + annealed-mean 解码（T=0.38），避免回归头灰暗问题
+- 消融对比：Huber 权重调参（10→5→3），最终 Stage 1/2 用 3×，Stage 3 用 5×
 
 ---
 

@@ -18,7 +18,7 @@ class TrainOptions(BaseOptions):
                             help='epochs at base learning rate')
         parser.add_argument('--niter_decay', type=int, default=100,
                             help='epochs to linearly decay lr to 0')
-        parser.add_argument('--lr', type=float, default=1e-4)
+        parser.add_argument('--lr', type=float, default=3e-5)
         parser.add_argument('--beta1', type=float, default=0.9)
         parser.add_argument('--lr_policy', type=str, default='lambda',
                             choices=['lambda', 'step', 'plateau'])
@@ -39,7 +39,7 @@ class TrainOptions(BaseOptions):
                             help='stage-full checkpoint (net_G.pth) to warm-start stage-instance')
         parser.add_argument('--inst_ckpt', type=str, default='',
                             help='stage-instance checkpoint (net_G.pth) to init fusion inst-net')
-        parser.add_argument('--lr_backbone', type=float, default=5e-5,
+        parser.add_argument('--lr_backbone', type=float, default=1e-5,
                             help='backbone lr in stage-instance (FiLM layers use --lr)')
         parser.add_argument('--ann_file', type=str, default='',
                             help='COCO annotation JSON for stage=instance (GT bbox+label)')
@@ -64,6 +64,17 @@ class TestOptions(BaseOptions):
         parser = super().initialize(parser)
         self.isTrain = False
 
+        parser.add_argument('--stage', type=str, default='fusion',
+                            choices=['full', 'instance', 'fusion'],
+                            help='which stage checkpoint to load for inst_fusion inference '
+                                 '(default: fusion — uses FusionPipeline + FiLMInstanceGenerator)')
+        parser.add_argument('--full_ckpt', type=str, default='',
+                            help='stage-full checkpoint for fusion inference')
+        parser.add_argument('--inst_ckpt', type=str, default='',
+                            help='stage-instance checkpoint for fusion inference')
+        parser.add_argument('--num_classes', type=int, default=91)
+        parser.add_argument('--embed_dim',   type=int, default=64)
+        parser.add_argument('--lr_backbone', type=float, default=5e-5)
         parser.add_argument('--T', type=float, default=T,
                             help='annealed-mean temperature for inference decoding')
         parser.add_argument('--rebalance_gamma', type=float, default=REBALANCE_GAMMA)

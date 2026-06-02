@@ -39,6 +39,52 @@ def bhattacharyya_distance(p, q):
     return -np.log(bc + 1e-10)
 
 
+def _test_instance_stage(opt, model, dataset, loader):
+    """Per-instance colorization test for stage=instance."""
+    os.makedirs(opt.results_img_dir, exist_ok=True)
+    total_inst = 0
+
+    for i, data in enumerate(loader):
+        if i >= opt.how_many:
+            break
+
+        file_id = data.get('file_id', [f'{i:05d}'])[0]
+
+        if data.get('empty_box', True):
+            print(f'[{file_id}] no instances detected, skipping')
+            continue
+
+        cropped = data['cropped_img']
+        if cropped.dim() == 5:
+            cropped = cropped.squeeze(0)
+        labels = data['class_labels'].squeeze(0)
+        N = cropped.shape[0]
+
+        for j in range(N):
+            item = {
+                'rgb_img':     cropped[j:j+1],
+                'class_label': labels[j:j+1],
+            }
+            model.set_input(item)
+            with torch.no_grad():
+                model.forward()
+
+            visuals = model.get_current_visuals()
+            for name, img_tensor in visuals.items():
+                arr  = tensor2im(img_tensor)
+                path = os.path.join(opt.results_img_dir,
+                                    f'{file_id}_inst{j}_{name}.png')
+                save_image(arr, path)
+            total_inst += 1
+
+        if (i + 1) % 10 == 0:
+            n = min(len(dataset), opt.how_many)
+            print(f'Processed {i + 1} / {n} images ({total_inst} instances)')
+
+    print(f'\nInstance test complete. {total_inst} instances saved to '
+          f'{opt.results_img_dir}')
+
+
 def main():
     opt = TestOptions().parse()
     opt.isTrain = False
@@ -51,6 +97,10 @@ def main():
     model = create_model(opt)
     model.eval()
     model.load_networks(opt.which_epoch)
+
+    if opt.method == 'inst_fusion' and getattr(opt, 'stage', 'fusion') == 'instance':
+        _test_instance_stage(opt, model, dataset, loader)
+        return
 
     os.makedirs(opt.results_img_dir, exist_ok=True)
 
