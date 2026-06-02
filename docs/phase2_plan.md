@@ -48,7 +48,7 @@
 
 训练过程中经历了多轮调参，最终确定的 loss 配置：
 - **Stage 1/2**：`L = CE(rebalanced) + 3 × Huber(ab)` — 分类头驱动鲜艳度，Huber 约束空间一致性
-- **Stage 3**：`L = CE(rebalanced) + 5 × Huber(fused_ab)` — CE 主导色彩，Huber×5 防止异常色块
+- **Stage 3**：`L = CE(rebalanced) + 3 × Huber(fused_ab)` — CE 主导色彩，Huber×3 防止异常色块
 
 ---
 
