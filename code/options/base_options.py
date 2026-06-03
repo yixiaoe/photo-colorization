@@ -22,7 +22,7 @@ class BaseOptions():
 
         # ── model ─────────────────────────────────────────────────────────
         parser.add_argument('--method', type=str, default='cnn_color',
-                            choices=['cnn_color', 'inst_fusion'],
+                            choices=['cnn_color', 'inst_fusion', 'text_color'],
                             help='colorization method')
         parser.add_argument('--ngf', type=int, default=64)
         parser.add_argument('--norm', type=str, default='batch',

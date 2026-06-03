@@ -36,15 +36,44 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--embed_dim', type=int, default=64,
                             help='FiLM class embedding dimension')
         parser.add_argument('--full_ckpt', type=str, default='',
-                            help='stage-full checkpoint (net_G.pth) to warm-start stage-instance')
+                            help='stage-full checkpoint (net_G.pth) to warm-start stage-instance / Phase 3')
         parser.add_argument('--inst_ckpt', type=str, default='',
-                            help='stage-instance checkpoint (net_G.pth) to init fusion inst-net')
+                            help='stage-instance checkpoint (net_G.pth) to init fusion inst-net / Phase 3')
         parser.add_argument('--lr_backbone', type=float, default=1e-5,
                             help='backbone lr in stage-instance (FiLM layers use --lr)')
         parser.add_argument('--ann_file', type=str, default='',
                             help='COCO annotation JSON for stage=instance (GT bbox+label)')
         parser.add_argument('--box_num', type=int, default=8,
                             help='max instances per image in fusion stage')
+
+        # ── Phase 3 specific (text_color) ────────────────────────────────
+        parser.add_argument('--fusion_ckpt', type=str, default='',
+                            help='Phase 2 stage-fusion checkpoint (FusionPipeline) for text_color')
+        parser.add_argument('--jsonl_file', type=str, default='',
+                            help='Phase 3 training JSONL from scripts/build_phase3_jsonl.py')
+        parser.add_argument('--val_jsonl_file', type=str, default='',
+                            help='Phase 3 validation JSONL')
+        parser.add_argument('--instances_file', type=str, default='',
+                            help='COCO instances_*.json for Phase 3 mask rasterisation')
+        parser.add_argument('--val_instances_file', type=str, default='',
+                            help='COCO val instances_*.json')
+        parser.add_argument('--val_img_dir', type=str, default='',
+                            help='Phase 3 val image directory')
+        parser.add_argument('--img_dir', type=str, default='',
+                            help='Phase 3 train image directory (overrides --data_dir)')
+        parser.add_argument('--clip_cache', type=str, default='data/clip_text_cache.pt',
+                            help='Phase 3 precomputed CLIP embedding cache (optional)')
+        parser.add_argument('--max_inst', type=int, default=8,
+                            help='Phase 3 max instances per image')
+        parser.add_argument('--huber_weight', type=float, default=3.0)
+        parser.add_argument('--lambda_inst', type=float, default=1.0)
+        parser.add_argument('--lambda_rank', type=float, default=0.1)
+        parser.add_argument('--lambda_outside', type=float, default=0.2)
+        parser.add_argument('--rank_margin', type=float, default=0.05)
+        parser.add_argument('--rank_warmup_epoch', type=int, default=5,
+                            help='Phase 3 epochs at λ=0 before linear warmup begins')
+        parser.add_argument('--rank_warmup_len', type=int, default=5,
+                            help='Phase 3 cosine warmup length after zero phase')
 
         # ── logging ───────────────────────────────────────────────────────
         parser.add_argument('--print_freq', type=int, default=100,
@@ -87,12 +116,26 @@ class TestOptions(BaseOptions):
         parser.add_argument('--box_num', type=int, default=8,
                             help='max instances per image (inst_fusion only)')
 
-        # ── Exemplar Bonus ────────────────────────────────────────────────
+        # ── Phase 3 (text_color) inference ────────────────────────────────
+        # --full_ckpt / --inst_ckpt are already defined above (shared with Phase 2)
+        parser.add_argument('--adapter_ckpt', type=str, default='',
+                            help='trained Phase 3 adapter (latest_net_T.pth)')
+        parser.add_argument('--fusion_ckpt', type=str, default='',
+                            help='Phase 3: frozen Phase 2 stage-fusion ckpt')
+        parser.add_argument('--clip_cache', type=str, default='data/clip_text_cache.pt')
+        parser.add_argument('--image', type=str, default='',
+                            help='Phase 3: single input image (alternative to --test_img_dir)')
+        parser.add_argument('--prompt', action='append', default=[],
+                            help='Phase 3: "inst:i=..." or "bg=...", repeatable')
+        parser.add_argument('--score_thresh', type=float, default=0.5,
+                            help='Phase 3: Mask R-CNN score threshold')
+
+        # ── Exemplar Bonus (legacy, kept for back-compat) ─────────────────
         parser.add_argument('--exemplar', action='store_true',
-                            help='enable exemplar-based colorization (Phase 3)')
+                            help='legacy: enable exemplar-based colorization')
         parser.add_argument('--ref_img', type=str, default='',
-                            help='path to reference style image (--exemplar mode)')
+                            help='legacy: reference style image')
         parser.add_argument('--harmonize', action='store_true',
-                            help='enable StyleHarmonizer between branches (inst_fusion + exemplar only)')
+                            help='legacy: StyleHarmonizer')
 
         return parser
