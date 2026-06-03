@@ -15,9 +15,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from util.check_deps import ensure_requirements
-ensure_requirements()
-
 from options.train_options import TestOptions
 from data_process.colorization_dataset import create_dataset
 from models import create_model

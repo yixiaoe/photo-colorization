@@ -18,15 +18,17 @@ from util.util import (
     build_zhang2016_rebalance_weights,
     encode_ab_bins_soft,
     encode_ab_bins_hard,
+    decode_zhang2016_annealed_mean,
 )
 
 
 # ── shared loss helper ────────────────────────────────────────────────────────
 
 def _ce_huber_loss(logits_class, pred_ab, gt_ab_soft, gt_ab_hard, rebalance_w,
-                   ab_norm, pts_in_hull):
+                   ab_norm, pts_in_hull, huber_weight=3.0,
+                   return_components=False):
     """
-    Combined CE (rebalanced) + 10× Huber loss used in Stage 1 & 2.
+    Combined CE (rebalanced) + weighted Huber loss used in Stage 1 & 2.
 
     logits_class: (N, 313, H/4, W/4)
     pred_ab:      (N, 2,   H,   W)   – Tanh output [-1,1]
@@ -65,7 +67,15 @@ def _ce_huber_loss(logits_class, pred_ab, gt_ab_soft, gt_ab_hard, rebalance_w,
                              0.5 * diff ** 2 / delta,
                              diff - 0.5 * delta).mean()
 
-    return loss_ce + 10.0 * loss_huber
+    loss_huber_weighted = huber_weight * loss_huber
+    total = loss_ce + loss_huber_weighted
+    if return_components:
+        return total, {
+            'ce': loss_ce,
+            'huber': loss_huber,
+            'huber_weighted': loss_huber_weighted,
+        }
+    return total
 
 
 class InstFusionModel(BaseModel):
@@ -320,10 +330,15 @@ class InstFusionModel(BaseModel):
 
     def backward(self):
         if self.stage in ('full', 'instance'):
-            self.loss_G = _ce_huber_loss(
+            self.loss_G, parts = _ce_huber_loss(
                 self.pred_class, self.pred_ab,
                 self.gt_ab_soft, self.gt_ab_hard,
-                self.rebalance_w, self.opt.ab_norm, self.pts_in_hull)
+                self.rebalance_w, self.opt.ab_norm, self.pts_in_hull,
+                huber_weight=getattr(self.opt, 'huber_weight', 3.0),
+                return_components=True)
+            self.loss_ce = parts['ce']
+            self.loss_huber = parts['huber']
+            self.loss_huber_weighted = parts['huber_weighted']
         else:  # fusion
             H, W = self.real_ab_full.shape[2:]
             pred_down = F.interpolate(self.pred_ab_fused, size=(H // 4, W // 4),
@@ -335,6 +350,7 @@ class InstFusionModel(BaseModel):
             self.loss_G = torch.where(diff < delta,
                                       0.5 * diff ** 2 / delta,
                                       diff - 0.5 * delta).mean()
+            self.loss_huber = self.loss_G
 
     def optimize_parameters(self):
         self.forward()
@@ -346,14 +362,24 @@ class InstFusionModel(BaseModel):
         self.optimizer.zero_grad()
         self.scaler.scale(self.loss_G).backward()
         self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(self.netG.parameters(), max_norm=5.0)
+        max_norm = getattr(self.opt, 'grad_clip_norm', 5.0)
+        if max_norm and max_norm > 0:
+            torch.nn.utils.clip_grad_norm_(
+                self.netG.parameters(), max_norm=max_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
     # ── reporting ─────────────────────────────────────────────────────────────
 
     def get_current_losses(self):
-        return {'G': self.loss_G.detach().item()}
+        losses = {'G': self.loss_G.detach().item()}
+        if hasattr(self, 'loss_ce'):
+            losses['ce'] = self.loss_ce.detach().item()
+        if hasattr(self, 'loss_huber'):
+            losses['huber'] = self.loss_huber.detach().item()
+        if hasattr(self, 'loss_huber_weighted'):
+            losses['huber_weighted'] = self.loss_huber_weighted.detach().item()
+        return losses
 
     def get_current_visuals(self):
         with torch.no_grad():
@@ -361,17 +387,14 @@ class InstFusionModel(BaseModel):
                 real_L  = self.real_L_full
                 real_ab = self.real_ab_full
                 pred_ab = self.pred_ab_fused
+                pred_class = None
             else:
                 real_L  = self.real_L
                 real_ab = self.real_ab
                 pred_ab = self.pred_ab
+                pred_class = getattr(self, 'pred_class', None)
 
             H, W = real_L.shape[2], real_L.shape[3]
-            pred_ab_up = F.interpolate(pred_ab, size=(H, W),
-                                       mode='bilinear', align_corners=False)
-
-            fake_lab = torch.cat([real_L, pred_ab_up], dim=1)
-            fake_rgb = lab2rgb(fake_lab, self.opt).clamp(0, 1)
 
             real_lab = torch.cat([real_L, real_ab], dim=1)
             real_rgb = lab2rgb(real_lab, self.opt).clamp(0, 1)
@@ -379,11 +402,34 @@ class InstFusionModel(BaseModel):
             gray = (real_L * self.opt.l_norm + self.opt.l_cent) / 100.
             gray = gray.expand(-1, 3, -1, -1).clamp(0, 1)
 
-        return {
-            'real_gray': gray,
-            'fake_rgb':  fake_rgb,
-            'real_rgb':  real_rgb,
-        }
+            visuals = {
+                'real_gray': gray,
+                'real_rgb':  real_rgb,
+            }
+
+            if pred_class is not None:
+                pred_ab_class = decode_zhang2016_annealed_mean(
+                    pred_class, self.pts_in_hull, T=0.38,
+                    ab_norm_val=self.opt.ab_norm)
+                pred_ab_class_up = F.interpolate(
+                    pred_ab_class, size=(H, W),
+                    mode='bilinear', align_corners=False)
+                fake_lab_class = torch.cat([real_L, pred_ab_class_up], dim=1)
+                visuals['fake_rgb'] = lab2rgb(
+                    fake_lab_class, self.opt).clamp(0, 1)
+
+                pred_ab_up = F.interpolate(pred_ab, size=(H, W),
+                                           mode='bilinear', align_corners=False)
+                fake_lab_reg = torch.cat([real_L, pred_ab_up], dim=1)
+                visuals['fake_rgb_reg'] = lab2rgb(
+                    fake_lab_reg, self.opt).clamp(0, 1)
+            else:
+                pred_ab_up = F.interpolate(pred_ab, size=(H, W),
+                                           mode='bilinear', align_corners=False)
+                fake_lab = torch.cat([real_L, pred_ab_up], dim=1)
+                visuals['fake_rgb'] = lab2rgb(fake_lab, self.opt).clamp(0, 1)
+
+        return visuals
 
     # ── checkpoint helpers ────────────────────────────────────────────────────
 

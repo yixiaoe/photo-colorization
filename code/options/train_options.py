@@ -23,12 +23,26 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr_policy', type=str, default='lambda',
                             choices=['lambda', 'step', 'plateau'])
         parser.add_argument('--epoch_count', type=int, default=0)
+        parser.add_argument('--max_epochs', type=int, default=100,
+                            help='hard cap on total epochs')
+        parser.add_argument('--grad_clip_norm', type=float, default=5.0,
+                            help='clip gradient norm; set <=0 to disable')
+        parser.add_argument('--nan_lr_factor', type=float, default=0.1,
+                            help='multiply lr by this factor after NaN/Inf loss')
+        parser.add_argument('--nan_max_retries', type=int, default=3,
+                            help='stop after this many NaN/Inf recovery attempts')
+        parser.add_argument('--early_stop_patience', type=int, default=6,
+                            help='validation checks without improvement before stop')
+        parser.add_argument('--early_stop_min_delta', type=float, default=0.0,
+                            help='minimum val loss improvement for early stopping')
 
         # ── Phase 1 specific ─────────────────────────────────────────────
         parser.add_argument('--T', type=float, default=T,
                             help='annealed-mean temperature for inference decoding')
         parser.add_argument('--rebalance_gamma', type=float, default=REBALANCE_GAMMA,
                             help='prior-mix gamma for class rebalance weights')
+        parser.add_argument('--huber_weight', type=float, default=3.0,
+                            help='weight for the ab regression Huber loss')
 
         # ── Phase 2 specific ─────────────────────────────────────────────
         parser.add_argument('--num_classes', type=int, default=91,
@@ -61,6 +75,14 @@ class TrainOptions(BaseOptions):
                             help='save checkpoint every N epochs')
         parser.add_argument('--avg_loss_alpha', type=float, default=0.986,
                             help='EMA smoothing for displayed loss')
+        parser.add_argument('--monitor_dir', type=str, default='results/jiandu',
+                            help='folder for CSV metrics and fixed sample visualisations')
+        parser.add_argument('--monitor_num', type=int, default=50,
+                            help='number of fixed samples saved for supervision')
+        parser.add_argument('--monitor_freq', type=int, default=5,
+                            help='save supervision samples every N validation epochs')
+        parser.add_argument('--monitor_seed', type=int, default=123,
+                            help='fixed random seed for monitor sample selection')
 
         return parser
 
@@ -70,6 +92,9 @@ class TestOptions(BaseOptions):
         parser = super().initialize(parser)
         self.isTrain = False
 
+        parser.add_argument('--stage', type=str, default='full',
+                            choices=['full', 'instance', 'fusion'],
+                            help='model stage for inst_fusion method')
         parser.add_argument('--T', type=float, default=T,
                             help='annealed-mean temperature for inference decoding')
         parser.add_argument('--rebalance_gamma', type=float, default=REBALANCE_GAMMA)

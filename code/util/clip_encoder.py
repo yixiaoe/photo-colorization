@@ -22,8 +22,11 @@ import open_clip
 class CLIPTextEncoder:
     """Extract token-level features from CLIP text transformer (frozen)."""
 
-    def __init__(self, arch='ViT-B-32', pretrained='openai', device='cpu'):
+    def __init__(self, arch='ViT-B-32', pretrained='openai',
+                 pretrained_path='', device='cpu'):
         self.device = torch.device(device)
+        if pretrained_path:
+            pretrained = pretrained_path
         model, _, _ = open_clip.create_model_and_transforms(
             arch, pretrained=pretrained)
         model.eval()

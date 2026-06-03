@@ -1,5 +1,6 @@
 # claude
 CLAUDE.md
+.claude/
 
 # IDE
 .vscode/
@@ -14,8 +15,12 @@ official_colorization_2016(reference)/
 
 # data / outputs (server-side only)
 code/datasets/
+code/data/
 code/checkpoints/
 code/results/
+checkpoints/
+results/
+photo-colorization.zip
 
 # python cache
 __pycache__/

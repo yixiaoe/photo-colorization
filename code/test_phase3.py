@@ -20,9 +20,6 @@ import os
 import torch
 import torch.nn.functional as F
 
-from util.check_deps import ensure_requirements
-ensure_requirements()
-
 from options.phase3_options import Phase3TestOptions
 from models.text_color_model import TextColorModel
 from util.util import save_image, tensor2im, rgb2lab, lab2rgb
