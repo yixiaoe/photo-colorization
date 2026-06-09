@@ -15,9 +15,9 @@ COCO_ROOT="${1:-datasets/coco}"
 NAME="${NAME:-phase3_text_color}"
 GPU="${GPU:-0}"
 
-JSONL_TRAIN="${JSONL_TRAIN:-data/phase3_color_object_train.jsonl}"
-JSONL_VAL="${JSONL_VAL:-data/phase3_color_object_val.jsonl}"
-CLIP_CACHE="${CLIP_CACHE:-data/clip_text_cache.pt}"
+JSONL_TRAIN="${JSONL_TRAIN:-datasets/phase3/color_object_train.jsonl}"
+JSONL_VAL="${JSONL_VAL:-datasets/phase3/color_object_val.jsonl}"
+CLIP_CACHE="${CLIP_CACHE:-datasets/phase3/clip_text_cache.pt}"
 
 if [ ! -f "$JSONL_TRAIN" ]; then
   echo "[error] training JSONL not found: $JSONL_TRAIN"
@@ -27,7 +27,7 @@ if [ ! -f "$JSONL_TRAIN" ]; then
   exit 1
 fi
 
-python train.py --method text_color \
+python -u train.py --method text_color \
   --jsonl_file          "$JSONL_TRAIN" \
   --val_jsonl_file      "$JSONL_VAL" \
   --img_dir             "$COCO_ROOT/train2017" \
@@ -38,9 +38,9 @@ python train.py --method text_color \
   --inst_ckpt           checkpoints/inst_fusion_instance/25_net_G.pth \
   --fusion_ckpt         checkpoints/inst_fusion_fusion/25_net_G.pth \
   --clip_cache          "$CLIP_CACHE" \
-  --fineSize 256 --batch_size 1 --nThreads 0 \
-  --lr 1e-4 --beta1 0.5 --huber_weight 3.0 \
-  --lambda_inst 1.0 --lambda_rank 0.1 --lambda_outside 0.2 \
-  --rank_margin 0.05 --rank_warmup_epoch 5 --rank_warmup_len 5 \
-  --niter 30 --niter_decay 30 --save_epoch_freq 5 \
+  --fineSize 256 --batch_size 1 --nThreads 4 \
+  --lr 5e-5 --beta1 0.5 --huber_weight 3.0 \
+  --lambda_inst 1.0 --lambda_rank 1.0 --lambda_outside 0.1 \
+  --rank_margin 0.3 --rank_warmup_epoch -1 --rank_warmup_len 1 \
+  --niter 5 --niter_decay 3 --save_epoch_freq 2 \
   --name "$NAME" --gpu_ids "$GPU"

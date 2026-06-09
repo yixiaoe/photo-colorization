@@ -274,7 +274,7 @@ epoch 11+ :  保持目标值
 **启动**：
 ```bash
 cd code
-bash scripts/train_phase3.sh /root/autodl-tmp/coco2017
+bash scripts/train_phase3.sh /root/autodl-tmp/code/datasets/coco
 ```
 
 展开：
@@ -468,3 +468,149 @@ requirements.txt                    # 新增 open_clip_torch, pycocotools
 | W3 | 完整训练 30+30 epoch | 收敛；val_loss 稳定；BD 不差于 Phase 2 |
 | W4 | 反事实测试 + prompt 控制矩阵 + ablation | mask 内 Δab > 10，mask 外 < 2 |
 | W5 | 端到端 demo + 报告整理 | 5 张实拍黑白照人工评测 |
+
+---
+
+## 17. 最终训练配置（实际跑通版本）
+
+原计划 30+30 epoch 在实际训练中被压缩到 **5+3 = 8 epoch**，warmup 也从 cosine 5 epoch 上升改为一次到位（`rank_warmup_epoch=-1, rank_warmup_len=1`）。原因：参数量只有 ~1.05M，warmup 期间 rank loss 系数为 0 时模型只学重建（等同 Phase 2 baseline），相当于浪费 epoch。
+
+**最终生效超参（`scripts/train_phase3.sh`）：**
+
+| 参数 | 值 | 备注 |
+|---|---|---|
+| `fineSize` | 256 | **强制要求**：与 Phase 2 训练分辨率一致 |
+| `batch_size` | 1 | 全图 + N 实例 |
+| `nThreads` | 4 | dataloader worker，避免 GPU 等待 |
+| `lr` | 5e-5 | adapter zero-init，不宜过大 |
+| `lambda_inst` | 1.0 | 与 `L_global` 同量级 |
+| `lambda_rank` | **1.0** | 初版 0.1 太弱，rank 信号被 global+inst_rec 淹没 |
+| `lambda_outside` | **0.1** | 初版 0.2 过强，背景过度锚定导致 prompt 无效 |
+| `rank_margin` | **0.3** | 初版 0.05 在 KL 空间太小���达标过易 |
+| `rank_warmup_epoch` | **-1** | 一次到位，warmup 从 epoch 1 即满值 |
+| `rank_warmup_len` | 1 | 同上 |
+| `niter / niter_decay` | 5 / 3 | 总 8 epoch |
+| `save_epoch_freq` | 2 | 中间存 ckpt 便于对比 |
+| AMP | 关闭 | 冻结 BN + fp16 会偶发 NaN，fp32 更稳 |
+
+**训练数据：** COCO 2017 train，113,674 张图 / 407,866 实例（HSV 颜色词置信度 ≥ 0.04 / person ≥ 0.15 过滤后），val 4,801 张 / 17,309 实例。
+
+**训练时间：** RTX 5090 单卡，909k iter / 8 epoch ≈ 14h（loss EMA 平稳，0 NaN）。
+
+**LR 时间线：**
+
+| epoch | warmup λ | LR | 阶段 |
+|:---:|:---:|:---:|---|
+| 1-5 | 1.0 | 5e-5 | 满 LR 学习期 |
+| 6-8 | 1.0 | 5e-5 → 0 | LR 线性衰减 |
+
+---
+
+## 18. 推理强制要求
+
+**🚨 推理时必须使用 `--fineSize 256`（默认即 256，但不要传 `--fineSize 224` 之类）。**
+
+实测 `fineSize 224` 推理会产生大量饱和黄色异常色块（dog default 837 px vs Phase 2 baseline 54 px，相差 ~15×）。原因是 Phase 2 网络在 256 分辨率上训练，224 输入导致 BN 统计量、感受野尺寸全部错位，annealed-mean 解码产生 Lab 色域外像素，clamp 后形成尖锐黄色块。
+
+**fs256 实测：** dog default 87 px，dog 各 prompt 87-192 px，cat 全部 0 px——回到 Phase 2 baseline 水准。
+
+---
+
+## 19. 最终验收结果（epoch 8）
+
+### 文本可控性（mean Δ vs default）
+
+| 测试 | prompt | mean Δ | 中心 RGB 变化 | 评价 |
+|---|---|:---:|---|:---:|
+| dog | red | 4.59 | B: 115→130 ↑ | ✅ 偏暖 |
+| dog | yellow | 5.33 | B: 115→94 ↓ | ✅ 明显变黄 |
+| dog | brown | 3.09 | B: 115→103 ↓ | ✅ 中度偏深 |
+| dog | **green** | **8.51** | R: 173→143 ↓, G↑ | ✅ **跨色成功**（金毛→绿） |
+| cat | gray | **6.93** | R: 185→166, B: 100→132 | ✅ **跨色成功**（橘猫→灰白） |
+| cat | orange | 2.19 | 微调强化原色 | ✓ 较弱但方向对 |
+| cat | brown | 1.60 | 与 orange 几乎相同 | ⚠️ **语义混淆**（见下） |
+
+### 跨色差异（cross-prompt mean Δ）
+
+| 对比 | mean Δ | 评价 |
+|---|:---:|:---:|
+| dog red ↔ yellow | **9.43** | 肉眼明显 |
+| dog green ↔ brown | **10.55** | 最大差异 |
+| cat gray ↔ orange | **9.02** | 肉眼明显 |
+
+### 训练曲线（epoch 4 → epoch 8 提升）
+
+| 指标 | e4 | e8 | Δ |
+|---|:---:|:---:|:---:|
+| dog red↔yellow | 7.42 | 9.43 | **+2.01** |
+| cat gray↔orange | 6.06 | 9.02 | **+2.96** |
+| dog brown vs default | 2.45 | 3.09 | +0.64 |
+
+**结论：** 后 4 epoch 训练继续有效，每个指标都在提升，未饱和。
+
+---
+
+## 20. 支持的颜色集合与已知限制
+
+### ✅ 支持的 prompt 颜色
+
+**核心彩色系（实测有效）：** `red` / `yellow` / `orange` / `brown` / `green` / `gray`
+
+这些颜色对应 313-bin ab 空间中**饱和度 > 0.3** 的清晰区域，模型能稳定学习并跨过 Phase 2 baseline 先验。
+
+**推荐 prompt 模板：**
+```
+inst:i=a <color> <class>           # 例：inst:0=a red dog
+inst:i=a <color> <class>           # 例：inst:1=a yellow shirt
+bg=<color> <background_type>       # 例：bg=blue sky / green grass
+```
+
+### ❌ 不支持的 prompt 颜色
+
+**亮度类颜色：** `black` / `white`（实测 mean Δ < 1.0，几乎无效）
+
+原因：
+1. 黑/白对应 ab ≈ (0, 0)，313-bin 分类器在低饱和度区域分辨力极弱
+2. 训练时 HSV 主色推断把 V<0.15 / V≥0.82 分别归为 black/white，但这些样本在 mask 内通常是阴影/高光而非真实"黑色物体/白色物体"
+3. CLIP 文本 "a black dog" 与 "a dog" 在嵌入空间距离较近，调制信号有限
+
+**建议：** 推理时若用户传 `black` / `white` prompt，应在 CLI 打印警告"亮度类描述效果受限"。
+
+### ⚠️ 已知限制
+
+**1. 相近色语义混淆**
+
+CLIP 在常见动物色上的语义边界较模糊：
+
+- cat `brown` vs `orange` mean Δ = 1.08（几乎相同）—— 训练数据里"orange tabby"和"brown cat"主色都偏暖，CLIP 嵌入距离过近
+- dog `brown` vs `yellow` mean Δ = 3.64 —— 中度可分但不强
+
+**这不是 bug，是 CLIP 语义本身的限制**。如果用户需要精确区分，建议使用差异更大的颜色对（如 red vs blue、gray vs orange）。
+
+**2. 跨图泛化能力较弱**
+
+| 测试 | dog (主测试图) | dog2 (泛化图) |
+|---|:---:|:---:|
+| red vs default | 4.59 | 1.67 |
+| yellow vs default | 5.33 | 2.16 |
+| red↔yellow | 9.43 | 3.12 |
+
+dog2 的可控性约为 dog 的 1/3。原因可能：
+- dog2 的 Mask R-CNN bbox/mask 与训练分布不完全匹配
+- 不同图像的 Phase 2 解码稳定性不同，prompt 撬动效果有差异
+
+**应对：** 实际部署时，建议用户对同一张图尝试多个 prompt 强度变体（如 "a red dog" vs "a deeply red dog"）。
+
+**3. yellow prompt 局部过饱和**
+
+dog yellow 推理图中狗鼻子下方偶有小块饱和黄色（192 px 区域）。这是 prompt 把局部 ab 推到色域边界后 RGB clamp 产生的瑕疵。可接受范围内，但若需修复可在 `lab2rgb` 之前对预测的 ab 加 magnitude 限制。
+
+---
+
+## 21. 收官状态
+
+- ✅ 训练完成：`checkpoints/phase3_text_color/8_net_T.pth` 作为 final ckpt（~4MB，1.05M 可训参数）
+- ✅ Phase 2 权重零修改：`networks.py` / `inst_fusion_model.py` / Phase 2 ckpt 全部未触
+- ✅ 推理 CLI 跑通：`test.py --method text_color`，支持 `--image` + `--prompt "inst:i=..." / "bg=..."`
+- ✅ 异常色块控制在 Phase 2 baseline 水平（仅 fs256 推理）
+- ✅ 颜色控制力可视化：dog 4 色 + cat 3 色 + dog2 泛化，结果保存在 `results/phase3_v6_e8_final/`

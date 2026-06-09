@@ -11,7 +11,7 @@ Usage:
 
   # Phase 3 (text_color, frozen on top of Phase 2)
   python train.py --method text_color \
-      --jsonl_file data/phase3_color_object_train.jsonl \
+      --jsonl_file datasets/phase3/color_object_train.jsonl \
       --instances_file datasets/coco/annotations/instances_train2017.json \
       --img_dir datasets/coco/train2017 \
       --full_ckpt   checkpoints/inst_fusion_full/80_net_G.pth \

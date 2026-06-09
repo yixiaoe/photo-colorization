@@ -11,7 +11,7 @@ Caption templates covered:
 
 Usage (run from code/, after download_clip.py succeeded):
   python scripts/cache_clip_embeddings.py \
-      --out_file data/clip_text_cache.pt
+      --out_file datasets/phase3/clip_text_cache.pt
 """
 import argparse
 import os
@@ -82,7 +82,7 @@ def collect_captions():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--out_file', default='data/clip_text_cache.pt')
+    ap.add_argument('--out_file', default='datasets/phase3/clip_text_cache.pt')
     ap.add_argument('--device',   default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--batch_size', type=int, default=256)
     args = ap.parse_args()

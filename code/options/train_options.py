@@ -61,7 +61,7 @@ class TrainOptions(BaseOptions):
                             help='Phase 3 val image directory')
         parser.add_argument('--img_dir', type=str, default='',
                             help='Phase 3 train image directory (overrides --data_dir)')
-        parser.add_argument('--clip_cache', type=str, default='data/clip_text_cache.pt',
+        parser.add_argument('--clip_cache', type=str, default='datasets/phase3/clip_text_cache.pt',
                             help='Phase 3 precomputed CLIP embedding cache (optional)')
         parser.add_argument('--max_inst', type=int, default=8,
                             help='Phase 3 max instances per image')
@@ -74,6 +74,8 @@ class TrainOptions(BaseOptions):
                             help='Phase 3 epochs at λ=0 before linear warmup begins')
         parser.add_argument('--rank_warmup_len', type=int, default=5,
                             help='Phase 3 cosine warmup length after zero phase')
+        parser.add_argument('--use_amp', action='store_true',
+                            help='Phase 3: enable AMP (off by default — frozen BN can NaN under fp16)')
 
         # ── logging ───────────────────────────────────────────────────────
         parser.add_argument('--print_freq', type=int, default=100,
@@ -122,7 +124,7 @@ class TestOptions(BaseOptions):
                             help='trained Phase 3 adapter (latest_net_T.pth)')
         parser.add_argument('--fusion_ckpt', type=str, default='',
                             help='Phase 3: frozen Phase 2 stage-fusion ckpt')
-        parser.add_argument('--clip_cache', type=str, default='data/clip_text_cache.pt')
+        parser.add_argument('--clip_cache', type=str, default='datasets/phase3/clip_text_cache.pt')
         parser.add_argument('--image', type=str, default='',
                             help='Phase 3: single input image (alternative to --test_img_dir)')
         parser.add_argument('--prompt', action='append', default=[],

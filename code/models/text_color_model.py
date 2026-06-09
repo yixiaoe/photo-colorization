@@ -98,8 +98,14 @@ class TextColorModel(BaseModel):
         pts = load_zhang2016_ab_bins()
         self.pts_in_hull = torch.tensor(pts, dtype=torch.float32, device=self.device)
 
-        self._use_amp = (len(opt.gpu_ids) > 0 and torch.cuda.is_available())
+        # AMP — opt-in via --use_amp; off by default because Phase 2's frozen
+        # BN can produce NaN under fp16 on some CUDA configs, and the adapter
+        # is only ~1M params so fp32 is essentially free.
+        use_amp_flag = getattr(opt, 'use_amp', False)
+        self._use_amp = (use_amp_flag and len(opt.gpu_ids) > 0
+                         and torch.cuda.is_available())
         self.scaler = torch.amp.GradScaler('cuda', enabled=self._use_amp)
+        print(f'[TextColorModel] AMP: {"enabled" if self._use_amp else "disabled"}')
 
         if self.isTrain:
             self.rebalance_w = build_zhang2016_rebalance_weights(
@@ -356,9 +362,17 @@ class TextColorModel(BaseModel):
         if torch.isnan(self.loss_G) or torch.isinf(self.loss_G):
             self._restore_bn_stats(bn_snap)
             self.optimizer.zero_grad()
-            # advance the AMP scale to recover
-            self.scaler.update()
+            self._nan_count = getattr(self, '_nan_count', 0) + 1
+            # advance the AMP scale only if the scaler has actually been
+            # used (its internal _scale gets lazily created by scaler.scale)
+            if self.scaler.is_enabled() and self.scaler.get_scale() is not None:
+                try:
+                    self.scaler.update()
+                except (AssertionError, RuntimeError):
+                    # scaler still unused — nothing to advance
+                    pass
             return
+        self._ok_count = getattr(self, '_ok_count', 0) + 1
         self.optimizer.zero_grad()
         self.scaler.scale(self.loss_G).backward()
         self.scaler.unscale_(self.optimizer)
@@ -370,6 +384,9 @@ class TextColorModel(BaseModel):
     # ── reporting ────────────────────────────────────────────────────────────
 
     def get_current_losses(self):
+        ok  = getattr(self, '_ok_count', 0)
+        nan = getattr(self, '_nan_count', 0)
+        nan_rate = nan / max(1, ok + nan)
         return {
             'G':        self.loss_G.detach().item(),
             'global':   self.loss_global.item(),
@@ -377,6 +394,7 @@ class TextColorModel(BaseModel):
             'rank':     self.loss_rank.item(),
             'outside':  self.loss_outside.item(),
             'warmup':   self.warmup,
+            'nan%':     nan_rate * 100.0,
         }
 
     def get_current_visuals(self):

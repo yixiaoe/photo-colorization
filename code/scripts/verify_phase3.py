@@ -67,15 +67,18 @@ def test_equivalence(args) -> bool:
     from models.text_color_networks import TextColorPipeline
 
     torch.manual_seed(args.seed)
-    netInst   = FiLMInstanceGenerator(num_classes=91, embed_dim=64).eval()
-    netFusion = FusionPipeline().eval()
+    device = torch.device(args.device)
+    print(f'  device: {device}')
+
+    netInst   = FiLMInstanceGenerator(num_classes=91, embed_dim=64).to(device).eval()
+    netFusion = FusionPipeline().to(device).eval()
 
     if args.with_ckpts:
         _load(netInst,   args.inst_ckpt,   'instance')
         _load(netFusion, args.fusion_ckpt, 'fusion')
         _load(netFusion, args.full_ckpt,   'full -> fusion backbone')
 
-    tcp = TextColorPipeline(netInst, netFusion, clip_dim=512).eval()
+    tcp = TextColorPipeline(netInst, netFusion, clip_dim=512).to(device).eval()
     print(f'  adapter params: {tcp.num_trainable_parameters():,}')
     for n, p in tcp.named_parameters():
         if p.requires_grad and p.abs().sum().item() != 0.0:
@@ -83,21 +86,24 @@ def test_equivalence(args) -> bool:
             return False
     print('  ✓ all adapter params zero-init')
 
-    sz, N = 256, 3
-    gray_full = torch.randn(1, 1, sz, sz)
-    inst_L = torch.randn(N, 1, sz, sz)
-    class_labels = torch.tensor([1, 18, 3])
+    sz, N = args.sz, args.n_inst
+    gray_full = torch.randn(1, 1, sz, sz, device=device)
+    inst_L = torch.randn(N, 1, sz, sz, device=device)
+    class_labels = torch.arange(1, N + 1, dtype=torch.long, device=device)
     box_info_list = []
+    box_w = max(8, sz // 4)
     for scale in (1, 2, 4, 8):
         s = sz // scale
-        box_info_list.append(torch.tensor([
-            [0, s - 100, 0, s - 100, 100, 100],
-            [10, s - 110, 10, s - 110, 100, 100],
-            [20, s - 120, 20, s - 120, 100, 100],
-        ], dtype=torch.long))
+        bw = max(1, box_w // scale)
+        rows = []
+        for i in range(N):
+            # tiny, non-overlapping, well within bounds at every scale
+            off = min(i * 2, s - bw - 1)
+            rows.append([off, s - off - bw, off, s - off - bw, bw, bw])
+        box_info_list.append(torch.tensor(rows, dtype=torch.long, device=device))
 
-    text_inst = torch.randn(N, 512)
-    text_bg   = torch.randn(1, 512)
+    text_inst = torch.randn(N, 512, device=device)
+    text_bg   = torch.randn(1, 512, device=device)
 
     with torch.no_grad():
         _, _, fm = netInst(inst_L, class_labels)
@@ -127,10 +133,10 @@ def test_equivalence(args) -> bool:
 
 # ── 2. smoke ───────────────────────────────────────────────────────────────
 
-def _build_smoke_opt():
+def _build_smoke_opt(use_cuda: bool):
     class _O: pass
     o = _O()
-    o.gpu_ids = []
+    o.gpu_ids = [0] if use_cuda else []
     o.isTrain = True
     o.checkpoints_dir = '/tmp/phase3_verify_ckpt'
     o.results_dir = '/tmp/phase3_verify_results'
@@ -157,20 +163,21 @@ def _build_smoke_opt():
 def _fake_batch(sz=64, N=3, device='cpu'):
     full_rgb = torch.rand(1, 3, sz, sz, device=device)
     cropped  = torch.rand(N, 3, sz, sz, device=device)
-    labels   = torch.tensor([1, 18, 3], dtype=torch.long, device=device)
+    labels   = torch.arange(1, N + 1, dtype=torch.long, device=device)
 
     def bi(scale):
         s = sz // scale
-        return torch.tensor([
-            [0, s - 10, 0, s - 10, 10, 10],
-            [5, s - 15, 5, s - 15, 10, 10],
-            [3, s - 13, 3, s - 13, 10, 10],
-        ], dtype=torch.long, device=device)
+        rows = []
+        for i in range(N):
+            off = min(2 + i * 2, max(0, s - 6))
+            rows.append([off, s - off - 4, off, s - off - 4, 4, 4])
+        return torch.tensor(rows, dtype=torch.long, device=device)
 
     m_full = torch.zeros(N, 1, sz, sz, device=device)
+    side = max(4, sz // 4)
     for i in range(N):
-        x0, y0 = 5 + i * 5, 5 + i * 5
-        m_full[i, 0, y0:y0 + 30, x0:x0 + 30] = 1.0
+        x0, y0 = 2 + i * 4, 2 + i * 4
+        m_full[i, 0, y0:y0 + side, x0:x0 + side] = 1.0
     m_4x = torch.nn.functional.interpolate(m_full, size=(sz // 4, sz // 4),
                                            mode='nearest')
 
@@ -178,35 +185,39 @@ def _fake_batch(sz=64, N=3, device='cpu'):
         'full_rgb':       full_rgb,
         'cropped_rgb':    cropped,
         'class_labels':   labels,
-        'class_names':    ['person', 'dog', 'car'],
+        'class_names':    [f'object{i}' for i in range(N)],
         'box_info':       bi(1),  'box_info_2x': bi(2),
         'box_info_4x':    bi(4),  'box_info_8x': bi(8),
         'masks_full':     m_full, 'masks_4x':    m_4x,
-        'caption_pos':    ['a red person', 'a yellow dog', 'a blue car'],
-        'caption_neg':    ['a cyan person', 'a purple dog', 'an orange car'],
+        'caption_pos':    [f'a red object{i}' for i in range(N)],
+        'caption_neg':    [f'a blue object{i}' for i in range(N)],
         'caption_bg_pos': 'outdoor scene', 'caption_bg_neg': 'indoor room',
         'empty_box':      False, 'file_id':     'verify',
     }
 
 
-def test_smoke() -> bool:
+def test_smoke(args) -> bool:
     print('\n== Test 2: TextColorModel optimize_parameters (synthetic batch) ==')
     from models.text_color_model import TextColorModel
-    opt = _build_smoke_opt()
+    use_cuda = (args.device == 'cuda')
+    opt = _build_smoke_opt(use_cuda)
+    print(f'  device: {args.device}')
     model = TextColorModel()
     model.initialize(opt)
     model.set_epoch(1)
     model.train()
 
+    sz_smoke = 64
+    N_smoke = args.n_inst
     for step in range(3):
-        model.set_input(_fake_batch(sz=64, N=3))
+        model.set_input(_fake_batch(sz=sz_smoke, N=N_smoke, device=args.device))
         model.optimize_parameters()
         losses = model.get_current_losses()
         print(f'  step {step}: ' +
               '  '.join(f'{k}={v:.4f}' for k, v in losses.items()))
 
     # gradient sanity (manual forward/backward; no optimizer.step)
-    model.set_input(_fake_batch(sz=64, N=3))
+    model.set_input(_fake_batch(sz=sz_smoke, N=N_smoke, device=args.device))
     model.optimizer.zero_grad()
     model.forward()
     model.backward()
@@ -233,7 +244,7 @@ def test_smoke() -> bool:
     print('  ✓ frozen Phase-2 networks: no gradients')
 
     # empty_box path
-    eb = _fake_batch(sz=64, N=1)
+    eb = _fake_batch(sz=sz_smoke, N=1, device=args.device)
     eb['empty_box'] = True
     eb.pop('cropped_rgb');  eb.pop('class_labels')
     model.set_input(eb)
@@ -256,13 +267,22 @@ def main():
     ap.add_argument('--inst_ckpt',   default='checkpoints/inst_fusion_instance/25_net_G.pth')
     ap.add_argument('--fusion_ckpt', default='checkpoints/inst_fusion_fusion/25_net_G.pth')
     ap.add_argument('--seed',        type=int, default=0)
+    ap.add_argument('--device',      default='auto',
+                    help='cuda | cpu | auto (default: cuda if available)')
+    ap.add_argument('--sz',          type=int, default=128,
+                    help='spatial size for equivalence test (smaller = less RAM)')
+    ap.add_argument('--n_inst',      type=int, default=2,
+                    help='number of synthetic instances')
     args = ap.parse_args()
+
+    if args.device == 'auto':
+        args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     _stub_optional_deps()
 
     ok = True
     ok &= test_equivalence(args)
-    ok &= test_smoke()
+    ok &= test_smoke(args)
 
     print('\n[RESULT]', 'ALL PASS ✓' if ok else 'FAIL ✗')
     sys.exit(0 if ok else 1)
