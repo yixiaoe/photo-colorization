@@ -131,6 +131,10 @@ class TestOptions(BaseOptions):
                             help='Phase 3: "inst:i=..." or "bg=...", repeatable')
         parser.add_argument('--score_thresh', type=float, default=0.5,
                             help='Phase 3: Mask R-CNN score threshold')
+        parser.add_argument('--ab_cap', type=float, default=0.45,
+                            help='Phase 3: cap on |ab| in normalised [-1,1] space '
+                                 '(0 disables; default 0.45 ≈ raw ab=50, suppresses '
+                                 'over-saturated yellow blobs at low-L pixels)')
 
         # ── Exemplar Bonus (legacy, kept for back-compat) ─────────────────
         parser.add_argument('--exemplar', action='store_true',

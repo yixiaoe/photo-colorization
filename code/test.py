@@ -221,6 +221,17 @@ def _test_text_color(opt, model):
 
         pred_ab = decode_zhang2016_annealed_mean(
             out_class.float(), model.pts_in_hull, T=opt.T, ab_norm_val=opt.ab_norm)
+
+        # ab magnitude cap — push pixels outside the safe gamut radius back
+        # to the boundary along their own direction (preserves hue, reduces
+        # saturation only where it would otherwise clip).  Acts on normalised
+        # ab in [-1, 1]; ab_cap=0.65 ≈ raw ab=72 (well inside sRGB).
+        ab_cap = getattr(opt, 'ab_cap', 0.65)
+        if ab_cap > 0:
+            mag = pred_ab.norm(dim=1, keepdim=True).clamp(min=1e-6)
+            scale = (ab_cap / mag).clamp(max=1.0)
+            pred_ab = pred_ab * scale
+
         pred_ab_up = F.interpolate(pred_ab, size=(sz, sz),
                                    mode='bilinear', align_corners=False)
         fake_lab = torch.cat([real_L_full, pred_ab_up], dim=1)

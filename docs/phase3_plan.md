@@ -614,3 +614,152 @@ dog yellow 推理图中狗鼻子下方偶有小块饱和黄色（192 px 区域�
 - ✅ 推理 CLI 跑通：`test.py --method text_color`，支持 `--image` + `--prompt "inst:i=..." / "bg=..."`
 - ✅ 异常色块控制在 Phase 2 baseline 水平（仅 fs256 推理）
 - ✅ 颜色控制力可视化：dog 4 色 + cat 3 色 + dog2 泛化，结果保存在 `results/phase3_v6_e8_final/`
+
+---
+
+## 22. 续训计划：Plan A（e8 → e12）
+
+**动机**：e8 已稳定收敛，但 dog2 泛化弱（mean Δ 仅为 dog 主图的 ~1/3），cat brown/orange 语义混淆。在 e8 基础上微调 4 个 epoch 尝试提升，**保留 e8 作为 fallback**。
+
+**关键调整：**
+
+| 参数 | e1-e8 | e9-e12 续训 | 理由 |
+|---|:---:|:---:|---|
+| `lr` | 5e-5 | **2e-5** | 避免破坏 e8 已学的能力 |
+| `lambda_rank` | 1.0 | **1.5** | 进一步推动可控性 |
+| `lambda_outside` | 0.1 | **0.05** | 防溢出由 e8 已学好，放开让 prompt 更激进 |
+| `rank_margin` | 0.3 | **0.4** | 逼模型再拉大 pos/neg 差距 |
+| `niter / niter_decay` | 5 / 3 | **10 / 2** | 总 epoch 数（绝对值），e9-e10 满 LR，e11-e12 衰减 |
+| `epoch_count` | 0 | **8** | 从 `8_net_T.pth` warm-start |
+| `save_epoch_freq` | 2 | **1** | 每 epoch 都存，方便逐步对比 |
+
+**预期时间：** RTX 5090 单卡 ~6h（4 epoch × ~1.5h/epoch）。
+
+**验收指标：**
+- ✅ 成功：dog2 mean Δ 提升 ≥ 1.5；dog 主图可控性不退化；异常色块 ≤ baseline × 3
+- ❌ 失败：rank loss 飙到 0.05+ / G 飙到 8+ / 异常色块 > 500 px → kill，回滚 e8
+
+**安全措施：** 续训前备份 `cp 8_net_T.pth 8_net_T.pth.backup`；e9 ckpt 出来先验证质量再决定是否继续。
+
+**Plan B（如 Plan A 失败）**：重建 JSONL 加 caption 多样化（5-10 种模板），从 e8 续训 8 epoch。
+
+---
+
+## 23. Plan A 续训结论（e8 → e12）
+
+**结论：未达成验收标准，回滚 `8_net_T.pth` 为最终版本。**
+
+| 指标 | e8 | e12 | 变化 | 评价 |
+|---|:---:|:---:|:---:|:---:|
+| dog red vs default | 4.59 | 5.00 | +0.41 | 微涨 |
+| dog yellow vs default | 5.33 | 5.20 | -0.13 | 微跌 |
+| dog brown vs default | 3.09 | 2.69 | -0.40 | 微跌 |
+| dog green vs default | 8.51 | 9.39 | +0.88 | 微涨 |
+| cat gray vs default | 6.93 | 7.62 | +0.70 | 微涨 |
+| **dog2 red vs default** | **1.67** | **1.93** | **+0.26** | ❌ 远未达标 |
+| dog2 yellow vs default | 2.16 | 2.29 | +0.13 | ❌ 未达标 |
+| dog default 异常色块 | 135 px | 181 px | +34% | ⚠️ 略劣化 |
+| dog yellow 异常色块 | 338 px | 461 px | +36% | ⚠️ 略劣化 |
+
+**根因分析：**
+
+1. **rank loss 已在 e8 饱和（~0.002）**，margin 0.3→0.4 在 100 iter 内被吸收，模型对 ranking 信号已"免疫"，没有有效梯度
+2. **1.05M adapter 参数容量已达上限**，4 个微调 epoch 改变不了什么
+3. **dog2 泛化弱不是训练问题，是数据问题**——单图 Mask R-CNN 检测分布与训练集 GT mask 分布有差异，纯靠训练无法弥合
+
+**Plan B（caption 多样化）受时间限制未尝试。**
+
+---
+
+## 24. Phase 3 后续优化方向
+
+按"成本/收益"排序，留作未来迭代参考：
+
+### 🥇 高收益（数据层面优化，最值得做）
+
+**1. 重建 JSONL，caption 模板多样化**
+
+当前 caption 只有"a {color} {object}"一种模板，CLIP 接收的语义信号单一。改造：
+
+```python
+# scripts/build_phase3_jsonl.py 增加模板池
+INST_TEMPLATES = [
+    "a {color} {obj}",
+    "a vivid {color} {obj}",
+    "the {obj} is {color}",
+    "a {color}-colored {obj}",
+    "a {color} colored {obj}",
+    "{obj} with {color} color",
+    "a deep {color} {obj}",
+    "a bright {color} {obj}",
+]
+# build 时为每个样本随机选 1-2 个模板存进 JSONL
+# 训练时 dataloader 再从中随机抽
+```
+
+**预期提升**：跨图泛化 +30-50%（dog2 mean Δ 从 1.67 提升到 ~2.5）。CLIP 见过更多自然语言变体，对新图新句的鲁棒性更强。
+
+**2. 加大 mask 内训练样本占比**
+
+当前 JSONL 一张图一行，但训练时 inst mask 只占图像面积 ~10%，背景占 90%。可以：
+- 训练时 inst crop 二次采样，放大到 fineSize
+- 给 inst_rec loss 加更大权重（lambda_inst 1.0 → 2.0）
+
+**预期提升**：mask 内可控性 +20%。
+
+### 🥈 中等收益（架构优化）
+
+**3. Adapter 加大到 2-3M 参数**
+
+当前 adapter 只调制 conv8_3/9_3/10_2 三层 decoder。可以：
+- 增加 conv7_3 / conv6_3 注入点（encoder 末尾）
+- 或者用 MLP（2 层）替换当前 1 层 Linear
+
+**预期提升**：黑/白 prompt 部分可用，cat brown↔orange 语义混淆改善。
+
+**4. Cross-attention 替换 FiLM（高风险）**
+
+参考 L-CoDer 思路，把 FiLM 改成 cross-attention（图像 query 文本 token）。L-CoDer 已经验证有效，但**代价是必须重训 +30 epoch**，且需修复你之前在 phase3_clip 分支看到的"颜色溢出"问题（outside loss 用 pos vs neg 而非 pos/neg vs GT 锚定）。
+
+### 🥉 小收益（推理 trick，不改训练）
+
+**5. 推理时多 prompt 平均**
+
+```python
+prompts = [
+    f"a {color} dog",
+    f"a vivid {color} dog",
+    f"the dog is {color}",
+]
+text_emb = mean([clip.encode(p) for p in prompts])
+```
+
+CLIP 噪声平均后调制更稳定。
+
+**预期提升**：mean Δ +0.5-1.0，0 训练成本。
+
+**6. ab magnitude 限制**
+
+在 `lab2rgb` 之前对 pred_ab 加 magnitude cap，防止 yellow 鼻子下方那种局部过饱和：
+
+```python
+ab_norm = pred_ab.norm(dim=1, keepdim=True)
+max_norm = 80  # 经验值
+pred_ab = pred_ab * (max_norm / ab_norm.clamp(min=max_norm))
+```
+
+**预期提升**：异常色块从 192 px 降到 < 50。0 训练成本。
+
+### 不建议做
+
+- **直接增加 epoch 数**：本次续训已证明无效，1M 参数 e8 已饱和
+- **调整 lambda 系数**：已经是当前架构下最优区间
+- **改 Lab→RGB 转换公式**：与 Phase 2 完全一致，改了会破坏 baseline
+
+### 推荐路径
+
+如果未来要进一步迭代 Phase 3，按 **5 → 6 → 1 → 3** 的顺序：
+
+1. 先做推理 trick（5, 6），零成本看上限
+2. 再重做数据（1），20h 训练换 30% 提升
+3. 最后才考虑架构（3），承担 30h 训练 + 风险
