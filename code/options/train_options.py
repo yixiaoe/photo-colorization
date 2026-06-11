@@ -65,6 +65,8 @@ class TrainOptions(BaseOptions):
                             help='Phase 3 precomputed CLIP embedding cache (optional)')
         parser.add_argument('--max_inst', type=int, default=8,
                             help='Phase 3 max instances per image')
+        parser.add_argument('--adapter_hidden', type=int, default=512,
+                            help='Phase 3 v2: TextAdapter MLP hidden dim (default 512)')
         parser.add_argument('--huber_weight', type=float, default=3.0)
         parser.add_argument('--lambda_inst', type=float, default=1.0)
         parser.add_argument('--lambda_rank', type=float, default=0.1)

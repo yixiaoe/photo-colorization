@@ -39,8 +39,9 @@ python -u train.py --method text_color \
   --fusion_ckpt         checkpoints/inst_fusion_fusion/25_net_G.pth \
   --clip_cache          "$CLIP_CACHE" \
   --fineSize 256 --batch_size 1 --nThreads 4 \
-  --lr 5e-5 --beta1 0.5 --huber_weight 3.0 \
-  --lambda_inst 1.0 --lambda_rank 1.0 --lambda_outside 0.1 \
-  --rank_margin 0.3 --rank_warmup_epoch -1 --rank_warmup_len 1 \
-  --niter 5 --niter_decay 3 --save_epoch_freq 2 \
+  --lr 1e-4 --beta1 0.5 --huber_weight 3.0 \
+  --adapter_hidden 512 \
+  --lambda_inst 1.0 --lambda_rank 1.5 --lambda_outside 0.1 \
+  --rank_margin 0.4 --rank_warmup_epoch -1 --rank_warmup_len 1 \
+  --niter 6 --niter_decay 4 --save_epoch_freq 2 \
   --name "$NAME" --gpu_ids "$GPU"

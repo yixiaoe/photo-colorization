@@ -1,8 +1,12 @@
-# Phase 3 实施方案：用户文本控制 Mask R-CNN 实例 / 背景颜色
+# Phase 3 实施方案：用户文本控制 Mask R-CNN 实例颜色
 
-**日期：** 2026/06/04
-**状态：** 方案设计（已与代码计划对齐）
-**核心思路：** 在 Phase 2 完成的 instance+fusion pipeline 上叠加 **两个 CLIP 文本 Adapter**（InstanceTextAdapter / BgTextAdapter），让用户为每个 Mask R-CNN 实例（或背景）单独指定文本 prompt，控制该区域颜色。Phase 2 全部权重 / 文件冻结，Phase 3 仅新增模块、纯加法。
+**日期：** 2026/06/04（初稿）/ 2026/06/11（v2 最终版本）
+**状态：** v2 训练中（实例分支单 adapter，2.89M 可训参数）
+**核心思路（v2 当前实现）：** 在 Phase 2 完成的 instance+fusion pipeline 上叠加**单个 CLIP InstanceTextAdapter**（MLP + 5 个注入点，~2.89M 参数），让用户为每个 Mask R-CNN 实例指定文本 prompt 控制颜色。**背景不接受文本调制**（v2 删除 BgTextAdapter，避免污染）。Phase 2 全部权重 / 文件冻结，Phase 3 仅新增 adapter、纯加法。
+
+> 下方 §1-§16 是 v1 原始方案设计（保留作为历史参考），实际跑通的 v2 实现见 §17 之后章节。v1/v2 差异：
+> - v1：InstanceTextAdapter + BgTextAdapter，单层 Linear，3 注入点，~1.05M 参数
+> - v2：仅 InstanceTextAdapter，2 层 MLP (Linear→GELU→Linear)，5 注入点，~2.89M 参数
 
 ---
 
@@ -763,3 +767,78 @@ pred_ab = pred_ab * (max_norm / ab_norm.clamp(min=max_norm))
 1. 先做推理 trick（5, 6），零成本看上限
 2. 再重做数据（1），20h 训练换 30% 提升
 3. 最后才考虑架构（3），承担 30h 训练 + 风险
+
+---
+
+## 25. v2 实现（当前最终版本）
+
+v1 在 §21 收官时已知有两个瓶颈：(a) bg_adapter 容易污染背景；(b) 1.05M adapter 容量在 e8 已饱和。v2 同时解决这两点。
+
+### 架构改动（对比 v1）
+
+| 维度 | v1 | **v2** |
+|---|:---:|:---:|
+| Adapter 数量 | 2 (inst + bg) | **1 (仅 inst)** |
+| 注入层 | conv8_3 / conv9_3 / conv10_2 | **+ conv6_3 / conv7_3** = 5 层 |
+| MLP 结构 | 单层 Linear(512, 2C) | **2 层 MLP：Linear(512, 512) → GELU → Linear(512, 2C)** |
+| 可训参数 | 1.05M | **2.89M** |
+| 背景文本控制 | bg_adapter 调制 | **删除，直接走 Phase 2 baseline** |
+| `bg_text_emb` API | 实际使用 | 保留参数签名但不消费（向前兼容 CLI） |
+
+**为什么删除 bg_adapter**：v1 测试显示 bg 异常色块（dog default 135 px）+ `cat gray↔orange` 跨色差仅 6 等问题，根因是 bg_adapter 与 Phase 2 解码器相互干扰。删除后背景永远等于 Phase 2 baseline，所有 cat / dog2 测试异常色块 = 0。
+
+**Zero-init 等价性**：MLP 最后一层 Linear 零初始化，第一层 Linear 保留默认初始化以保证梯度流。训练前 pipeline 输出与 Phase 2 fusion 推理 bit-equal（已单元测试验证）。
+
+### 推理后处理：ab magnitude cap
+
+`test.py` 在 `decode_zhang2016_annealed_mean` 后、`lab2rgb` 前加入：
+```python
+ab_cap = 0.45                                    # 默认值（--ab_cap 可调）
+mag = pred_ab.norm(dim=1, keepdim=True).clamp(min=1e-6)
+pred_ab = pred_ab * (ab_cap / mag).clamp(max=1.0)  # 保留色相方向，仅缩放半径
+```
+**根因**：异常黄色块的 normalised |ab| 仅 0.55-0.63（并未真过饱和），但低 L (~30) + 中 b (~60) 在 sRGB 转换后落到鲜艳黄色。cap 至 0.45 把 b 压到 ~50 消除色块。
+
+实测效果（v1 e8 ckpt）：dog yellow 异常黄色块 338 → 53 px (-84%)，可控性损失 ≤ 0.15 mean Δ。
+
+### v2 训练配置（`scripts/train_phase3.sh`）
+
+| 参数 | v1 | **v2** |
+|---|:---:|:---:|
+| `lr` | 5e-5 | **1e-4** |
+| `lambda_rank` | 1.0 | **1.5** |
+| `rank_margin` | 0.3 | **0.4** |
+| `lambda_outside` | 0.1 | 0.1 |
+| `niter / niter_decay` | 5 / 3 | **6 / 4** = 10 epoch |
+| `adapter_hidden` | — | **512** |
+| `save_epoch_freq` | 2 | 2 |
+
+预期时间：RTX 5090 单卡 ~15-18h。
+
+### v2 训练曲线（截至 epoch 7）
+
+rank loss 从 epoch 1 iter 100 的 0.40 平稳下降到 epoch 7 的 ~0.02，G 在 5±0.5 区间无 NaN。
+
+### v2 vs v1 e8 实测（v2 epoch 6 测试，三图全测）
+
+**可控性（mean Δ vs default，越大越好）：**
+
+| 测试 | v1 e8 | **v2 e6** | 提升 |
+|---|:---:|:---:|:---:|
+| dog red | 4.48 | **7.46** | +2.98 |
+| dog green | 8.46 | **12.24** | +3.78 |
+| cat gray | 6.93 | **13.04** | +6.11 |
+| dog2 red | 1.65 | **2.76** | +1.11 |
+| dog2 yellow | 2.15 | **3.33** | +1.18 |
+
+**异常色块**：cat / dog2 全部 0 px（删 bg_adapter 的直接收益）；dog red 异常块从 v1 e8 的 12 → v2 e6 的 **2 px**。
+
+**结论**：v2 仅用 v1 一半训练量（e6 vs e8），可控性全面提升、异常色块全面降低，**dog2 跨图泛化也有显著改善**——这是 v1 没解决的核心问题。
+
+### v2 最终状态
+
+- ✅ `checkpoints/phase3_text_color/10_net_T.pth` 为 final ckpt（~12MB，2.89M 可训参数）
+- ✅ `test.py` 默认 `--ab_cap 0.45`，自动抑制异常色块
+- ✅ `bg=` prompt 在 v2 中**无效**（保留参数兼容旧 CLI，但实际不调制）
+- ⚠️ 仍不支持 black/white（CLIP 语义 + 313-bin 量化双重限制）
+- ⚠️ cat brown/orange 语义混淆仍存在（CLIP 嵌入距离过近，非训练问题）

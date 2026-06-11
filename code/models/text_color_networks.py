@@ -1,16 +1,25 @@
 """
-Phase 3 pipeline that composes the frozen Phase 2 networks
-(FiLMInstanceGenerator, FusionPipeline) with two text-conditioned
-TextAdapter modules (instance + background).
+Phase 3 v2 pipeline that composes the frozen Phase 2 networks
+(FiLMInstanceGenerator, FusionPipeline) with one text-conditioned
+TextAdapter module on the instance branch only.
 
-Critical contract: when both adapters are zero-initialised, the output
+v2 changes vs v1:
+- Removed bg_adapter entirely. Background follows Phase 2 baseline
+  with no text conditioning, eliminating bg over-saturation drift
+  and simplifying the contract.
+- 5 injection points on instance branch (conv6_3, conv7_3, conv8_3,
+  conv9_3, conv10_2) instead of 3.
+- TextAdapter MLP: Linear -> GELU -> Linear (was: single Linear).
+- ~2.5M trainable parameters (was ~1.05M).
+
+Critical contract: when the adapter is zero-initialised, the output
 must be bit-equal (up to numerical noise) to the Phase 2 fusion-stage
-output. The bg_adapter only modulates `conv8_3`, `conv9_3`, `conv10_2`
-**after** the corresponding `model_*` block has run, i.e. at the exact
-points consumed by the WeightGenerator + heads in FusionPipeline.
+output. This is preserved by zero-init on the FINAL MLP layer only.
 
 Reference: see FusionPipeline.forward in models/networks.py (~lines
-570-637) which this class mirrors line by line.
+570-637) which this class mirrors line by line. Bg path now identical
+to FusionPipeline; only the instance feature maps fed into WGs are
+text-modulated by inst_adapter.
 """
 from typing import Dict, List, Optional
 
@@ -20,10 +29,12 @@ import torch.nn as nn
 from .networks import FiLMInstanceGenerator, FusionPipeline
 
 
-# Decoder layers where the adapters inject. These match the keys in the
-# feature_map dict produced by InstanceGenerator/FiLMInstanceGenerator
-# (see networks.py:252-259).
-DECODER_LAYERS = {
+# Instance-side injection points. Spans encoder bottleneck (conv6_3/
+# conv7_3, both 512ch) + decoder (conv8_3 256ch, conv9_3/conv10_2
+# 128ch). Total adapter params ≈ 2.5M.
+INSTANCE_LAYERS = {
+    'conv6_3':  512,
+    'conv7_3':  512,
     'conv8_3':  256,
     'conv9_3':  128,
     'conv10_2': 128,
@@ -32,31 +43,39 @@ DECODER_LAYERS = {
 
 class TextAdapter(nn.Module):
     """
-    FiLM-style text-conditioned modulator over a multi-scale feature dict.
+    FiLM-style text-conditioned modulator with 2-layer MLP projection.
 
         feat'        =  feat * (1 + gamma) + beta
-        [gamma, beta] = Linear(text_emb).chunk(2, dim=1)
+        [gamma, beta] = Linear(GELU(Linear(text_emb)))
 
-    Linear layers are zero-init so gamma = beta = 0 at the start of training,
+    Final Linear is zero-init so gamma = beta = 0 at start of training,
     making an untrained pipeline bit-equal to the unmodulated baseline.
     """
 
-    def __init__(self, clip_dim: int, layer_channels: Dict[str, int]):
+    def __init__(self, clip_dim: int,
+                 layer_channels: Dict[str, int],
+                 hidden_dim: int = 512):
         super().__init__()
         self.clip_dim = clip_dim
         self.layer_channels = dict(layer_channels)
         self.proj = nn.ModuleDict({
-            name: nn.Linear(clip_dim, 2 * ch)
+            name: nn.Sequential(
+                nn.Linear(clip_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, 2 * ch),
+            )
             for name, ch in layer_channels.items()
         })
-        for m in self.proj.values():
-            nn.init.zeros_(m.weight)
-            nn.init.zeros_(m.bias)
+        # zero-init ONLY the final Linear of each MLP so the residual
+        # path is identity at start; first Linear keeps its default init
+        # so gradients flow once training starts.
+        for mlp in self.proj.values():
+            final = mlp[-1]
+            nn.init.zeros_(final.weight)
+            nn.init.zeros_(final.bias)
 
     def forward(self, feat_dict, text_emb):
         out = dict(feat_dict)
-        # only modulate keys present in feat_dict – callers may pass a
-        # single-layer dict (bg hook) or the full instance feature map
         for name in feat_dict:
             if name not in self.proj:
                 continue
@@ -73,7 +92,8 @@ class TextColorPipeline(nn.Module):
     def __init__(self,
                  netInst: FiLMInstanceGenerator,
                  netFusion: FusionPipeline,
-                 clip_dim: int = 512):
+                 clip_dim: int = 512,
+                 hidden_dim: int = 512):
         super().__init__()
         self.netInst = netInst
         self.netFusion = netFusion
@@ -87,13 +107,16 @@ class TextColorPipeline(nn.Module):
         self.netInst.eval()
         self.netFusion.eval()
 
-        self.inst_adapter = TextAdapter(clip_dim, DECODER_LAYERS)
-        self.bg_adapter   = TextAdapter(clip_dim, DECODER_LAYERS)
+        # v2: instance adapter only — background uses Phase 2 baseline
+        # without text conditioning. This eliminates the bg-drift /
+        # over-saturation issues observed in v1.
+        self.inst_adapter = TextAdapter(clip_dim, INSTANCE_LAYERS,
+                                        hidden_dim=hidden_dim)
 
     # ── trainable param helpers ────────────────────────────────────────
 
     def get_trainable_params(self):
-        return list(self.inst_adapter.parameters()) + list(self.bg_adapter.parameters())
+        return list(self.inst_adapter.parameters())
 
     def num_trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.get_trainable_params())
@@ -101,10 +124,7 @@ class TextColorPipeline(nn.Module):
     # ── train/eval override: keep frozen branches always in eval ───────
 
     def train(self, mode: bool = True):
-        # adapters follow the requested mode
         self.inst_adapter.train(mode)
-        self.bg_adapter.train(mode)
-        # frozen branches stay in eval to lock BN stats and dropout
         self.netInst.eval()
         self.netFusion.eval()
         return self
@@ -117,21 +137,25 @@ class TextColorPipeline(nn.Module):
                 class_labels: Optional[torch.Tensor],    # (N,) long or None
                 box_info_list: Optional[List[torch.Tensor]],  # [bi_H, bi_H2, bi_H4, bi_H8]
                 inst_text_embs: Optional[torch.Tensor],  # (N, clip_dim) or None
-                bg_text_emb: torch.Tensor,               # (1, clip_dim)
+                bg_text_emb: torch.Tensor,               # (1, clip_dim) — accepted for API compat but UNUSED in v2
                 empty_box: bool = False):
         """
         Returns (out_class, out_reg) matching FusionPipeline.forward:
           out_class: (1, 313, H/4, W/4)
           out_reg:   (1, 2,   H,   W)
+
+        Note: bg_text_emb is accepted for backward CLI compatibility but
+        is NOT consumed in v2 — background colorization follows Phase 2
+        baseline unconditionally.
         """
+        del bg_text_emb  # explicitly unused in v2
+
         # ── 1. instance branch ────────────────────────────────────────
         has_inst = (not empty_box) and inst_L is not None and inst_L.shape[0] > 0
         if has_inst:
             with torch.no_grad():
-                # frozen Phase-2 forward; AMP autocast is taken from caller context
                 _, _, fm_batch = self.netInst(inst_L, class_labels)
-            # adapter is the *only* trainable bit here, so gradients flow back
-            # through fm_batch_text via the adapter's Linear weights.
+            # adapter modulates the 5 injection points; other keys pass through
             fm_batch_text = self.inst_adapter(fm_batch, inst_text_embs)
 
             N = inst_L.shape[0]
@@ -142,21 +166,20 @@ class TextColorPipeline(nn.Module):
         else:
             inst_feats = []
 
-        # ── 2. background branch with bg adapter ──────────────────────
-        return self._fusion_with_bg_adapter(
-            gray_full, inst_feats, box_info_list, bg_text_emb, has_inst,
-        )
+        # ── 2. background branch (NO bg adapter in v2) ────────────────
+        return self._fusion(gray_full, inst_feats, box_info_list, has_inst)
 
-    # ── 3. mirror of FusionPipeline.forward with bg-adapter hooks ─────
+    # ── 3. mirror of FusionPipeline.forward (no bg-adapter hooks) ─────
 
-    def _fusion_with_bg_adapter(self,
-                                gray_full,
-                                inst_feats,
-                                box_info_list,
-                                bg_text_emb,
-                                has_inst):
-        """Reproduces FusionPipeline.forward (networks.py:570-637) and inserts
-        bg_adapter modulation at conv8_3 / conv9_3 / conv10_2."""
+    def _fusion(self,
+                gray_full,
+                inst_feats,
+                box_info_list,
+                has_inst):
+        """Reproduces FusionPipeline.forward (networks.py:570-637) verbatim.
+        Instance modulation happens upstream in `inst_adapter` — by the time
+        we get here the feature_map dicts in `inst_feats` are already
+        text-conditioned."""
         F = self.netFusion   # shorthand
 
         if has_inst:
@@ -170,13 +193,7 @@ class TextColorPipeline(nn.Module):
                 return wg(_stack(key), feat, bi)
             return feat
 
-        def _bg_modulate(name, feat):
-            """Apply bg_adapter only at the three decoder hook points."""
-            if name not in DECODER_LAYERS:
-                return feat
-            return self.bg_adapter({name: feat}, bg_text_emb)[name]
-
-        # ── Encoder (no bg-adapter hooks; identical to FusionPipeline) ──
+        # ── Encoder ──────────────────────────────────────────────────
         conv1_2 = F.model1(gray_full)
         conv1_2 = _fuse(F.wg_conv1_2,  conv1_2, 'conv1_2',  bi0 if has_inst else None)
 
@@ -203,21 +220,18 @@ class TextColorPipeline(nn.Module):
         conv8_up = _fuse(F.wg_conv8_up, conv8_up, 'conv8_up', bi2 if has_inst else None)
 
         conv8_3 = F.model8(conv8_up)
-        conv8_3 = _bg_modulate('conv8_3', conv8_3)
         conv8_3 = _fuse(F.wg_conv8_3,  conv8_3, 'conv8_3',  bi2 if has_inst else None)
 
         conv9_up = F.model9up(conv8_3) + F.model2short9(conv2_2)
         conv9_up = _fuse(F.wg_conv9_up, conv9_up, 'conv9_up', bi1 if has_inst else None)
 
         conv9_3 = F.model9(conv9_up)
-        conv9_3 = _bg_modulate('conv9_3', conv9_3)
         conv9_3 = _fuse(F.wg_conv9_3,  conv9_3, 'conv9_3',  bi1 if has_inst else None)
 
         conv10_up = F.model10up(conv9_3) + F.model1short10(conv1_2)
         conv10_up = _fuse(F.wg_conv10_up, conv10_up, 'conv10_up', bi0 if has_inst else None)
 
         conv10_2 = F.model10(conv10_up)
-        conv10_2 = _bg_modulate('conv10_2', conv10_2)
         conv10_2 = _fuse(F.wg_conv10_2, conv10_2, 'conv10_2', bi0 if has_inst else None)
 
         out_class = F.model_class(conv8_3)

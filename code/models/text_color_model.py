@@ -84,9 +84,11 @@ class TextColorModel(BaseModel):
         self.netFusion = FusionPipeline().to(self.device).eval()
         self._load_phase2_ckpts(opt)
 
-        # the wrapper holding trainable adapters
+        # the wrapper holding trainable adapter (v2: instance only)
+        adapter_hidden = getattr(opt, 'adapter_hidden', 512)
         self.netT = TextColorPipeline(self.netInst, self.netFusion,
-                                      clip_dim=512).to(self.device)
+                                      clip_dim=512,
+                                      hidden_dim=adapter_hidden).to(self.device)
         print(f'[TextColorModel] trainable params: '
               f'{self.netT.num_trainable_parameters():,}')
 
@@ -436,10 +438,10 @@ class TextColorModel(BaseModel):
     # ── checkpoint I/O (only the trainable adapters) ────────────────────────
 
     def save_networks(self, epoch):
-        """Save only the adapters; Phase-2 weights are external and frozen."""
+        """Save only the adapter; Phase-2 weights are external and frozen.
+        v2: bg_adapter removed — instance adapter only."""
         sd = {
             'inst_adapter': self.netT.inst_adapter.state_dict(),
-            'bg_adapter':   self.netT.bg_adapter.state_dict(),
         }
         path = os.path.join(self.save_dir, f'{epoch}_net_T.pth')
         torch.save(sd, path)
@@ -451,14 +453,17 @@ class TextColorModel(BaseModel):
         if not os.path.isfile(path):
             path = os.path.join(self.save_dir, 'latest_net_T.pth')
         if not os.path.isfile(path):
-            # also accept --adapter_ckpt path
             alt = getattr(self.opt, 'adapter_ckpt', '')
             if alt and os.path.isfile(alt):
                 path = alt
         if os.path.isfile(path):
             sd = torch.load(path, map_location=self.device)
+            # v2: only inst_adapter; silently ignore bg_adapter if present
+            # (e.g. when loading a v1 ckpt for comparison — its inst_adapter
+            # shape won't match anyway so the load will fail loudly there)
             self.netT.inst_adapter.load_state_dict(sd['inst_adapter'])
-            self.netT.bg_adapter.load_state_dict(sd['bg_adapter'])
+            if 'bg_adapter' in sd:
+                print(f'[load] ignoring bg_adapter from v1-format ckpt {path}')
             print(f'[load] adapter ckpt: {path}')
         else:
             print(f'[warn] adapter ckpt not found: {path}')
