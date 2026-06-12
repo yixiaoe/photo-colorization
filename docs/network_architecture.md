@@ -351,13 +351,61 @@ FiLM 参数     →  lr = 1e-4  （随机初始化，用正常学习率学习）
 
 ---
 
+## Phase 3：TextColorPipeline（CLIP 文本 Adapter，组合于冻结 Phase 2）
+
+`models/text_color_networks.py` 中的 `TextColorPipeline` 通过 **composition**（组合，非继承）持有冻结的 `FiLMInstanceGenerator` 与 `FusionPipeline`，在实例分支注入一个 `TextAdapter`。Phase 2 文件零修改。
+
+```
+gray_full → FusionPipeline.backbone（冻结）
+inst_L,label → FiLMInstanceGenerator（冻结）→ feature_map[N 实例]
+              ↓
+              TextAdapter（可训，5 个调制点）
+                  conv6_3 (512ch)  conv7_3 (512ch)
+                  conv8_3 (256ch)  conv9_3 (128ch)  conv10_2 (128ch)
+                  对每层： FiLM gamma/beta 由 CLIP text_emb 经 2 层 MLP 生成
+              ↓
+              modulated inst_feats → WeightGenerator（冻结）逐层融合
+              ↓
+              冻结的 model_class / output_conv
+              ↓
+              out_class (313, H/4) → annealed-mean(T=0.38) → ab → RGB
+```
+
+### TextAdapter（v2 单 adapter 设计）
+
+```
+text_emb (B, 512)
+    │
+    │  per-layer MLP:
+    │     Linear(512, 512)
+    │       ↓ GELU
+    │     Linear(512, 2C)         ← 最后一层 zero-init，保证训练前 bit-equal Phase 2
+    │
+   [gamma, beta] = chunk(2)        # (B, C) each
+    │
+feat * (1 + gamma) + beta         ← FiLM 残差调制
+```
+
+**关键设计：**
+
+- **背景不接受文本调制**：v1 曾用 `bg_adapter` 调制 decoder 三层，但 bg 文本/decoder 相互干扰导致背景偏色和异常色块。v2 删除 bg_adapter，背景直接走 Phase 2 baseline。
+- **CLIP ViT-B/32-quickgelu 冻结**，仅用文本塔；离线缓存所有训练 caption embedding 至 `datasets/phase3/clip_text_cache.pt`。
+- **空间精度依赖 Phase 2 WeightGenerator**：TextAdapter 在 channel 维度调制 feature_map，但 WG 已学到的 mask 几何被完整保留，因此颜色控制天然限定在实例 mask 内部。
+
+### 推理后处理：ab magnitude cap
+
+`test.py` 在 `decode_zhang2016_annealed_mean` 后、`lab2rgb` 前对 normalised ab 做 magnitude cap（默认 0.45）：保留色相方向，仅缩放半径，抑制低 L + 中 b 像素被 sRGB 转换映射到的鲜艳黄斑。实测 dog yellow 异常黄色块 338 → 53 px，可控性损失可忽略。
+
+---
+
 ## 三阶段训练参数量汇总
 
 | Stage | 网络 | 可训参数 | 冻结参数 | 数据集 |
 |-------|------|---------|---------|--------|
-| full | InstanceGenerator | ~32M | — | ImageNet-Mini |
-| instance | FiLMInstanceGenerator | ~32M（骨干 lr=5e-5）+ 272K（FiLM lr=1e-4） | — | COCO2017 GT crop |
-| fusion | FusionPipeline | ~78K（WeightGenerator）+ 258（output_conv） | ~32M 骨干 + ~32M 实例网 | COCO2017 全图 |
+| Phase 1 full | InstanceGenerator | ~32M | — | ImageNet-Mini |
+| Phase 2 instance | FiLMInstanceGenerator | ~32M（骨干 lr=5e-5）+ 272K（FiLM lr=1e-4） | — | COCO2017 GT crop |
+| Phase 2 fusion | FusionPipeline | ~78K（WeightGenerator）+ 258（output_conv） | ~32M 骨干 + ~32M 实例网 | COCO2017 全图 |
+| Phase 3 text_color | TextColorPipeline (仅 TextAdapter 可训) | **2.89M**（5 层 FiLM MLP） | 全部 Phase 2 + CLIP 文本塔 | COCO2017 + JSONL caption |
 
 ---
 
@@ -369,7 +417,16 @@ Stage full / instance:
 
 Stage fusion:
     L = Huber(fused_ab_H4, gt_ab_H4)     ← 先下采样至 H/4 再计算
+
+Phase 3 (text_color, 每 step 双前向 pos / neg prompt):
+    L_global  = CE_rebalanced(out_class_pos, gt_ab) + 3 × Huber(out_reg_pos, gt_ab)
+    L_inst    = mask 内 CE + 3 × Huber             ← 强化实例区域重建
+    L_rank    = max(0, margin + KL(gt || p_pos) − KL(gt || p_neg))   ← mask 内，逼 pos 比 neg 更贴 GT
+    L_outside = pos / neg 在 mask 外都贴 GT                            ← 防 prompt 污染背景
+    L_total   = L_global + 1.0×L_inst + 1.5×L_rank + 0.1×L_outside
+                  margin=0.4   双前向 lambda_rank 满值无 warmup
 ```
 
 **CE rebalanced：** 对稀有色彩（如蓝色海洋、金发）给予更高权重，抑制模型退化为灰色。  
-**Huber delta=0.01：** 对异常值（错误预测的饱和色）鲁棒，比 L2 更稳定。
+**Huber delta=0.01：** 对异常值（错误预测的饱和色）鲁棒，比 L2 更稳定。  
+**Ranking loss（Phase 3）：** 在 313-bin 概率上做 KL 差异，相对幅度小（~0.02），但通过 annealed-mean 解码的非线性放大成最终 RGB 上的可见颜色变化。

@@ -22,7 +22,7 @@ photo-colorization/
 |-------|---------|---------|-----------|-----------|
 | Phase 1 | `cnn_color` | 全局 CNN + ab 软编码分类（Zhang et al. 2016） | 否 | 否 |
 | Phase 2 | `inst_fusion` | 双分支 + FiLM 语义调制 + 融合权重（Su et al. CVPR 2020 + 创新） | 是（torchvision） | 是（融合权重） |
-| Phase 3 | `--exemplar` | Cross-Attention 色彩迁移，叠加于任意方法 | 同上 | 是（额外） |
+| Phase 3 | `text_color` | CLIP 文本 Adapter 叠加于冻结 Phase 2，per-instance prompt 颜色控制 | 是（推理时 + ab_cap 后处理） | 否（FiLM 调制） |
 
 ---
 
@@ -31,16 +31,18 @@ photo-colorization/
 ```
 code/
 ├── train.py                       # 训练主入口（--method / --stage）
-├── test.py                        # 推理主入口（--method / --exemplar）
+├── test.py                        # 推理主入口（--method / --prompt）
 ├── options/
 │   ├── base_options.py            # 基础参数（dataset、name、fineSize 等）
-│   └── train_options.py           # 训练/推理参数（method、stage、exemplar）
+│   └── train_options.py           # 训练/推理参数（method、stage、prompt、ab_cap）
 ├── models/
 │   ├── __init__.py                # 按 --method 动态加载模型
 │   ├── base_model.py              # 基类（save/load/scheduler）
 │   ├── cnn_color_model.py         # Phase 1：全图上色训练/推理逻辑
 │   ├── inst_fusion_model.py       # Phase 2：三阶段训练/融合推理逻辑
-│   └── networks.py                # 所有网络结构定义（见下方说明）
+│   ├── text_color_model.py        # Phase 3：双前向训练 + adapter ckpt I/O
+│   ├── text_color_networks.py     # Phase 3：TextAdapter + TextColorPipeline（组合 Phase 2）
+│   └── networks.py                # Phase 1/2 网络结构定义
 ├── datasets/
 │   └── colorization_dataset.py   # 统一 Dataset（支持 cnn_color / inst_fusion）
 ├── util/
@@ -49,6 +51,9 @@ code/
 └── scripts/
     ├── train_phase1.sh            # Phase 1 单阶段训练
     ├── train_phase2.sh            # Phase 2 三阶段训练编排
+    ├── train_phase3.sh            # Phase 3 单 adapter 训练
+    ├── build_phase3_jsonl.py      # COCO → JSONL（HSV 颜色词 + 负色采样）
+    ├── cache_clip_embeddings.py   # 离线缓存所有训练 caption 的 CLIP 文本嵌入
     ├── test.sh                    # 推理（支持所有方法组合）
     └── setup.sh                   # 环境验证脚本
 ```
@@ -65,8 +70,8 @@ code/
 | `FiLMInstanceGenerator` | Phase 2 实例分支 | InstanceGenerator + conv4~7 FiLM 调制 |
 | `WeightGenerator` | Phase 2 融合 | 逐层 softmax 加权融合全图与实例特征 |
 | `FusionPipeline` | Phase 2 | 调度全图/实例/融合的完整推理流程 |
-| `ExemplarAttention` | Phase 3 | Cross-Attention 色彩迁移模块 |
-| `StyleHarmonizer` | Phase 3（inst_fusion） | 分支间 Cross-Attention，实例风格向全图风格对齐（创新点） |
+| `TextAdapter` | Phase 3 | 每层独立 2 层 MLP（512→GELU→2C）生成 FiLM gamma/beta，最后一层 zero-init |
+| `TextColorPipeline` | Phase 3 | 组合冻结 `FiLMInstanceGenerator` + `FusionPipeline`，在实例 5 个 conv 层注入 TextAdapter（背景不调制） |
 
 ---
 
@@ -129,35 +134,40 @@ code/
 
 ---
 
-## Phase 3 数据流（Bonus，叠加于 Phase 1 或 Phase 2）
+## Phase 3 数据流（CLIP 文本控制，叠加于冻结 Phase 2）
 
-**cnn_color + exemplar：**
 ```
-灰度图（L）          参考风格图
-    │                    │
-CnnColorGenerator    Color Palette 提取
-    │（深层特征）         │（patch embedding）
-    └──── ExemplarAttention ────┘
-                   │
-             ab 输出 → RGB
+灰度图 L                              用户 prompt:
+   │                                  inst:0=a red dog
+   │                                  inst:1=a yellow shirt
+   │                                  (bg prompt 接受但忽略，背景不调制)
+   │                                     ↓
+   │                                  CLIP ViT-B/32 文本塔（冻结）
+   │                                  → text_emb (N, 512)
+   │
+   ├──→ Mask R-CNN → {bbox, label, mask} × N 实例
+   │
+   ├──→ FiLMInstanceGenerator（冻结）
+   │      实例分支 feature_map per layer
+   │           ↓
+   │      TextAdapter（可训，2.89M）
+   │           5 层 FiLM 调制：conv6_3 / conv7_3 / conv8_3 / conv9_3 / conv10_2
+   │           ↓
+   │      modulated inst_feats
+   │
+   └──→ FusionPipeline（冻结）
+          backbone 处理全图 bg 特征
+          WeightGenerator 用 modulated inst_feats 逐层融合
+          model_class → out_class (313)
+              ↓
+          annealed-mean(T=0.38) → ab
+              ↓
+          ab magnitude cap（默认 0.45，保留色相、缩放半径）
+              ↓
+          L + ab → lab2rgb → RGB
 ```
 
-**inst_fusion + exemplar：**
-```
-参考风格图 → Color Palette
-              ↙                    ↘
-全图分支 ExemplarAttention    实例分支 ExemplarAttention
-              ↓                         ↓
-         F_full（全局风格）         F_inst（实例风格）
-                   ↘                  ↙
-         [--harmonize] StyleHarmonizer（可选，创新点）
-                    F_inst 以 F_full 为 K/V 做 Cross-Attention
-                    实例风格向全局风格空间对齐
-                         ↓
-                  FusionGenerator
-                         │
-                   ab 输出 → RGB
-```
+**关键性质：** Phase 2 全部权重冻结，TextAdapter MLP 最后一层 zero-init 保证训练前 pipeline 输出与 Phase 2 baseline bit-equal。Phase 3 是纯加法扩展，不破坏 Phase 1/2 已建立的能力。
 
 ---
 
@@ -175,4 +185,4 @@ CnnColorGenerator    Color Palette 提取
 
 1. **Phase 2 骨干复用 Phase 1**：`InstFusionGenerator` 直接加载 Phase 1 训练好的权重，不从头训练
 2. **Mask R-CNN 不是硬前置**：仅 Phase 2 instance/fusion 阶段使用，在线调用，无需离线预计算
-3. **Phase 3 按需叠加**：通过 `--exemplar` flag 激活，不影响 Phase 1/2 的主逻辑
+3. **Phase 3 通过 composition 叠加**：`TextColorPipeline` 持有冻结 Phase 2 对象，`networks.py` / `inst_fusion_model.py` / Phase 2 ckpt 全部零修改
