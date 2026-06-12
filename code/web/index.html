@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photo Colorization Demo</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Photo Colorization</h1>
+  <span>Phase 1 / Phase 2 / Phase 3 · localhost demo</span>
+</header>
+
+<div class="container">
+
+  <!-- ① Upload -->
+  <div class="card">
+    <h2>① Upload Image</h2>
+    <div id="drop-zone">
+      <input type="file" id="file-input" accept="image/*">
+      <div id="drop-hint">
+        <svg width="40" height="40" fill="none" stroke="#bbb" stroke-width="1.5" viewBox="0 0 24 24">
+          <path d="M3 15v4a2 2 0 002 2h14a2 2 0 002-2v-4M7 10l5-5 5 5M12 5v10"/>
+        </svg>
+        <p>Drag & drop or click to upload (jpg / png · max 4 MB)</p>
+        <p style="font-size:.75rem;margin-top:4px">Colour or grayscale both supported</p>
+      </div>
+      <img id="upload-preview" alt="preview">
+    </div>
+  </div>
+
+  <!-- ② Method -->
+  <div class="card">
+    <h2>② Select Method</h2>
+    <div class="method-tabs">
+      <button class="method-btn" data-method="phase1">Phase 1 — CNN</button>
+      <button class="method-btn active" data-method="phase2">Phase 2 — FiLM ★</button>
+      <button class="method-btn" data-method="phase3">Phase 3 — Text</button>
+    </div>
+    <p class="method-hint" id="method-hint">FiLM instance-aware colorization (default). Click an instance card to view its pre-fusion coloring. ~15s on CPU.</p>
+  </div>
+
+  <!-- ③ Instances (Phase 2 / 3) -->
+  <div class="card" id="instance-section">
+    <h2>③ Instances</h2>
+    <div class="inst-list" id="inst-list"></div>
+  </div>
+
+  <!-- ④ Run -->
+  <div class="card">
+    <div class="run-row">
+      <button id="run-btn">▶ Colorize</button>
+      <div class="spinner" id="spinner"></div>
+      <span id="status-msg">Upload an image to begin.</span>
+    </div>
+  </div>
+
+  <!-- ⑤ Results -->
+  <div class="card" id="result-section">
+    <h2>⑤ Result</h2>
+    <div class="result-grid" id="result-grid"></div>
+    <button id="download-btn">⬇ Download result</button>
+  </div>
+
+</div><!-- /container -->
+
+<!-- Phase 2 instance modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box">
+    <span class="modal-close" id="modal-close">✕</span>
+    <h3 id="modal-title">Instance — pre-fusion coloring</h3>
+    <div class="modal-imgs">
+      <div class="modal-img-item">
+        <p>Grayscale crop</p>
+        <img id="modal-gray" alt="gray crop">
+      </div>
+      <div class="modal-img-item">
+        <p>Instance branch coloring</p>
+        <img id="modal-colored" alt="instance colored">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

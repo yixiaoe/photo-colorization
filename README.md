@@ -44,6 +44,28 @@ photo-colorization/
 └── paper/                              # Reference papers
 ```
 
+## Web Demo
+
+A localhost web interface is available for interactive colorization without using the command line.
+
+```bash
+cd code
+python app.py
+# Open http://localhost:5000 in your browser
+```
+
+**Usage:**
+1. Upload a grayscale or colour photo (jpg/png, ≤ 4 MB)
+2. Select a method — Phase 1 (CNN), Phase 2 (FiLM, default), or Phase 3 (Text)
+3. **Phase 2:** detected instances are listed; click any instance card after colorizing to view its pre-fusion branch result
+4. **Phase 3:** assign a colour prompt to each instance via colour swatches or free text (e.g. `a red dog`); click **Reset** to restore the default prompt
+5. Click **Colorize** and compare the result against the original / grayscale input
+6. Download the colorized image with the **Download** button
+
+> Colour images are automatically converted to grayscale for inference; the result panel shows original, grayscale, and colorized side by side.
+
+---
+
 ## Inference
 
 ```bash
@@ -55,7 +77,7 @@ python test.py --method text_color \
     --inst_ckpt   checkpoints/inst_fusion_instance/25_net_G.pth \
     --fusion_ckpt checkpoints/inst_fusion_fusion/25_net_G.pth \
     --image datasets/test/dog.png \
-    --prompt "inst:0=a red dog" \
+    --prompt "inst:0=a brown dog" \
     --results_img_dir results/phase3 \
     --gpu_ids 0
     # --fineSize 256 (default, do NOT use 224)
