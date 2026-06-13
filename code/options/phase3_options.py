@@ -48,6 +48,8 @@ class Phase3TrainOptions(BaseOptions):
         parser.add_argument('--lambda_rank', type=float, default=0.1)
         parser.add_argument('--lambda_outside', type=float, default=0.2)
         parser.add_argument('--rank_margin', type=float, default=0.05)
+        parser.add_argument('--seed', type=int, default=None,
+                            help='optional random seed for controlled ablations')
 
         # optimisation
         parser.add_argument('--niter', type=int, default=30)

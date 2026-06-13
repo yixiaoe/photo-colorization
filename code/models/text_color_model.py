@@ -334,6 +334,9 @@ class TextColorModel(BaseModel):
 
     def train(self):
         self.netG.train()
+        # keep frozen backbone's BatchNorm in eval so running stats don't drift per-rank
+        net = self.netG.module if hasattr(self.netG, 'module') else self.netG
+        net.backbone.eval()
 
     def eval(self):
         self.netG.eval()

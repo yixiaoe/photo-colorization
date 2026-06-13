@@ -40,20 +40,22 @@ class BaseModel:
     def save_networks(self, epoch):
         for name in self.model_names:
             net = getattr(self, 'net' + name)
+            sd = net.module.state_dict() if hasattr(net, 'module') else net.state_dict()
             path = os.path.join(self.save_dir, f'{epoch}_net_{name}.pth')
-            torch.save(net.state_dict(), path)
+            torch.save(sd, path)
             latest = os.path.join(self.save_dir, f'latest_net_{name}.pth')
-            torch.save(net.state_dict(), latest)
+            torch.save(sd, latest)
 
     def load_networks(self, epoch):
         for name in self.model_names:
             net = getattr(self, 'net' + name)
+            target = net.module if hasattr(net, 'module') else net
             path = os.path.join(self.save_dir, f'{epoch}_net_{name}.pth')
             if not os.path.isfile(path):
                 path = os.path.join(self.save_dir, f'latest_net_{name}.pth')
             if os.path.isfile(path):
                 state = torch.load(path, map_location=self.device)
-                net.load_state_dict(state)
+                target.load_state_dict(state)
                 print(f'Loaded {path}')
             else:
                 print(f'[Warning] checkpoint not found: {path}')
